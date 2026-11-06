@@ -1,0 +1,62 @@
+#!/bin/zsh
+# Command-line control for the local FreeFlow backends.
+#   freeflowctl install     install the login agent (start now, at every login, restart on crash)
+#                           IDLE_UNLOAD_SECONDS=900 freeflowctl install  -> change idle timeout (0 = always warm)
+#   freeflowctl uninstall   remove the login agent
+#   freeflowctl status      agent state, which models are loaded, idle time
+#   freeflowctl restart     restart the backend (models reload on the next dictation)
+#   freeflowctl logs        follow the logs
+#   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
+set -euo pipefail
+D="${0:A:h}"
+URL="http://127.0.0.1:8081/v1"
+SETTINGS="$HOME/Library/Application Support/FreeFlow/.settings"
+LABEL=com.freeflow.local
+
+case "${1:-status}" in
+  install)   "$D/install-autostart.sh" ;;
+  uninstall) "$D/install-autostart.sh" --uninstall ;;
+  restart)
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Restarted. Models load on the next dictation." ;;
+  logs) tail -n 20 -f "$D/logs/server.log" "$D/logs/llm.log" ;;
+  status)
+    if info=$(launchctl print "gui/$UID/$LABEL" 2>/dev/null); then
+      state=$(print -r -- "$info" | awk -F' = ' '/^\tstate =/{print $2; exit}')
+      code=$(print -r -- "$info" | awk -F' = ' '/last exit code/{print $2; exit}')
+      echo "agent: ${state:-?}${code:+ (last exit: $code)}"
+    else
+      echo "agent: not installed (run: freeflowctl install)"
+    fi
+    curl -s -m 3 http://127.0.0.1:8081/health | /usr/bin/python3 -c '
+import json, sys
+try:
+    h = json.load(sys.stdin)
+except Exception:
+    sys.exit(print("server: down"))
+idle = h.get("idle_unload_after", 0)
+print("server: up")
+print("speech model:", "loaded" if h.get("asr_loaded", h.get("ok")) else "unloaded")
+print("cleanup LLM: ", "loaded" if h.get("llm_running") else "unloaded")
+secs = h.get("idle_seconds", "?")
+print(f"idle for {secs}s; unloads after", f"{idle:.0f}s" if idle > 0 else "never (always warm)")' || true
+    [[ -f "$SETTINGS" ]] && /usr/bin/python3 -c 'import json,sys; print("FreeFlow API Base URL:", json.load(open(sys.argv[1])).get("api_base_url", "(default: Groq)"))' "$SETTINGS" ;;
+  configure)
+    osascript -e 'tell application "FreeFlow" to quit' 2>/dev/null || true
+    sleep 2
+    mkdir -p "${SETTINGS:h}"
+    /usr/bin/python3 - "$SETTINGS" "$URL" <<'EOF'
+import json, os, sys
+path, url = sys.argv[1], sys.argv[2]
+d = json.load(open(path)) if os.path.exists(path) else {}
+d["api_base_url"] = url
+d.pop("transcription_api_url", None)  # audio goes to the same URL
+d.setdefault("groq_api_key", "local")  # FreeFlow requires a non-empty key
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(d, f)
+print("FreeFlow API Base URL ->", url)
+EOF
+    open -a FreeFlow ;;
+  *) sed -n '2,8p' "$0"; exit 1 ;;
+esac

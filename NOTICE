@@ -1,0 +1,26 @@
+freeflow-local
+Copyright 2026 Ayush Patnaik
+
+This project is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or derives from the following work:
+
+- parakeet-mlx (https://github.com/senstella/parakeet-mlx), Apache License 2.0.
+  fast_tdt.py reimplements the greedy TDT decoding loop of ParakeetTDT.decode_greedy
+  and calls parakeet-mlx's tokenizer, alignment and audio utilities.
+
+It depends on, but does not include:
+
+- mlx and mlx-lm (https://github.com/ml-explore), MIT License, Copyright Apple Inc.
+- FreeFlow (https://github.com/zachlatta/freeflow), MIT License. This project is an
+  independent companion backend and is not affiliated with or endorsed by FreeFlow.
+
+Model weights are downloaded from Hugging Face at install time and are not
+redistributed by this repository:
+
+- Orukeet, by Oruk AI (https://huggingface.co/oruk/orukeet), an adaptation of NVIDIA
+  Parakeet TDT 0.6B v3. Weights licensed CC BY-SA 4.0. MLX conversion by itsreidar
+  (https://huggingface.co/itsreidar/orukeet-mlx), CC BY-SA 4.0.
+- NVIDIA Parakeet TDT 0.6B v3 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), CC BY 4.0.
+- Gemma 4 E4B by Google (https://huggingface.co/google/gemma-4-E4B-it), Apache License 2.0.
+  4-bit MLX conversion by mlx-community.
