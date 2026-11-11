@@ -15,6 +15,8 @@ LLM_MODEL="${LLM_MODEL:-mlx-community/gemma-4-e4b-it-4bit}"
 for label in com.freeflow.asr com.freeflow.llm "$LABEL"; do  # also removes the older two-agent layout
   launchctl bootout "gui/$UID/$label" 2>/dev/null || true
   rm -f "$LA/$label.plist"
+  # bootout returns before the job is gone; bootstrapping too early fails with "5: Input/output error"
+  for _ in {1..50}; do launchctl print "gui/$UID/$label" >/dev/null 2>&1 || break; sleep 0.2; done
 done
 [[ "${1:-}" == "--uninstall" ]] && { echo "Removed FreeFlow local agent."; exit 0; }
 
@@ -43,5 +45,9 @@ cat > "$LA/$LABEL.plist" <<EOF
 </dict></plist>
 EOF
 plutil -lint -s "$LA/$LABEL.plist"
-launchctl bootstrap "gui/$UID" "$LA/$LABEL.plist"
+for attempt in {1..5}; do
+  launchctl bootstrap "gui/$UID" "$LA/$LABEL.plist" 2>/dev/null && break
+  (( attempt == 5 )) && { launchctl bootstrap "gui/$UID" "$LA/$LABEL.plist"; exit 1; }  # show the error
+  sleep 1
+done
 echo "Installed (idle unload after ${IDLE}s). Logs: $D/logs/server.log, $D/logs/llm.log"

@@ -49,8 +49,13 @@ cd "$DEST"
 echo "Setting up Python environment..."
 uv sync --frozen --quiet --compile-bytecode
 echo "Downloading models (about 6 GB the first time; later runs skip this)..."
-uv run --frozen hf download "$ASR_MODEL" --quiet >/dev/null
-uv run --frozen hf download "$LLM_MODEL" --quiet >/dev/null
+for model in "$ASR_MODEL" "$LLM_MODEL"; do
+  # Only show the downloader's output if it fails (it otherwise prints tips unrelated to this install).
+  if ! out=$(uv run --frozen hf download "$model" --quiet 2>&1); then
+    print -r -- "$out" >&2
+    exit 1
+  fi
+done
 
 if (( AUTOSTART )); then
   ./install-autostart.sh
