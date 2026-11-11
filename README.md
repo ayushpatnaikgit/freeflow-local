@@ -79,6 +79,9 @@ FreeFlow talks to any OpenAI-compatible API. This backend serves one on `http://
 
 - `/v1/audio/transcriptions` runs Orukeet in-process with [parakeet-mlx](https://github.com/senstella/parakeet-mlx) and a
   faster greedy decoder (`fast_tdt.py`, ~30% faster with identical output).
+- Hesitation sounds (uh, um, uhm, hmm) are removed right after transcription, so they disappear even when
+  FreeFlow's "preserve exact wording" mode is on or cleanup is skipped. Real words such as "er", "ah" and "mm"
+  are kept. Set `STRIP_FILLERS=0` in the environment to turn this off.
 - `/v1/chat/completions` is forwarded to an `mlx_lm.server` process that the backend starts and stops on demand. The
   model name FreeFlow sends is ignored, so FreeFlow's model settings don't matter.
 

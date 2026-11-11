@@ -16,6 +16,7 @@ import asyncio
 import gc
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -41,6 +42,7 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
+STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm after transcription
 
 
 def log(msg: str) -> None:
@@ -85,7 +87,26 @@ def _transcribe(path: str) -> str:
     _load_asr()
     text = fast_tdt.transcribe(_asr, path, chunk_seconds=CHUNK_SECONDS)
     mx.clear_cache()
-    return text
+    return strip_fillers(text) if STRIP_FILLERS else text
+
+
+# Hesitation sounds only: "er" (German "he"), "ah" and "mm" (millimetres) are real words, so they stay.
+_FILLER = re.compile(
+    r"(?:\s*,)?\s*(?<![\w'])(?:u+h+m*|u+m+|h+m{2,})(?![\w'])([,.!?…]*)\s*", re.IGNORECASE)
+
+
+def strip_fillers(text: str) -> str:
+    """Remove uh/um/uhm/hmm with the commas around them, keeping any sentence-ending mark."""
+    def drop(m: re.Match) -> str:
+        end = "".join(c for c in m.group(1) if c in ".!?…")
+        return f"{end} " if end else " "
+
+    out = _FILLER.sub(drop, text)
+    out = re.sub(r"\s+([,.!?…])", r"\1", out)                       # "noon ." -> "noon."
+    out = re.sub(r"(^|[.!?…]\s+)[,.!?…\s]+", r"\1", out)            # punctuation left at a sentence start
+    out = re.sub(r"(^|[.!?…]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out if re.search(r"\w", out) else ""
 
 
 # ---------------------------------------------------------------- LLM (child process)
