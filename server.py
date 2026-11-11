@@ -16,6 +16,7 @@ import asyncio
 import gc
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -37,8 +38,7 @@ import fast_tdt
 HERE = Path(__file__).resolve().parent
 ASR_MODEL = os.environ.get("ASR_MODEL", "itsreidar/orukeet-mlx")
 LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
-LLM_PORT = int(os.environ.get("LLM_PORT", "8080"))
-LLM_URL = f"http://127.0.0.1:{LLM_PORT}"
+LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
 
@@ -91,6 +91,7 @@ def _transcribe(path: str) -> str:
 # ---------------------------------------------------------------- LLM (child process)
 
 _llm: subprocess.Popen | None = None
+_llm_port = 0
 _llm_lock = asyncio.Lock()
 _cleanup_system_prompt: str | None = None  # memory only; contains the user's vocabulary
 
@@ -99,9 +100,15 @@ def _llm_alive() -> bool:
     return _llm is not None and _llm.poll() is None
 
 
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def _http(method: str, path: str, body: dict | None = None, timeout: float = 300) -> tuple[int, bytes, str]:
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(f"{LLM_URL}{path}", data=data, method=method,
+    req = urllib.request.Request(f"http://127.0.0.1:{_llm_port}{path}", data=data, method=method,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -114,26 +121,32 @@ def _http(method: str, path: str, body: dict | None = None, timeout: float = 300
 
 
 async def _ensure_llm() -> None:
-    """Start mlx_lm.server if needed and wait until it answers HTTP."""
-    global _llm
+    """Start mlx_lm.server if needed and wait until *it* (not some other server) answers."""
+    global _llm, _llm_port
     async with _llm_lock:
         if _llm_alive():
             return
         t = time.perf_counter()
+        _llm_port = LLM_PORT or _free_port()
         logf = open(HERE / "logs" / "llm.log", "ab")
         _llm = subprocess.Popen(
             [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_MODEL,
-             "--host", "127.0.0.1", "--port", str(LLM_PORT), "--max-tokens", "4096",
+             "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
              "--chat-template-args", '{"enable_thinking":false}'],
             stdout=logf, stderr=subprocess.STDOUT, cwd=HERE)
-        while time.perf_counter() - t < 60:
+        while True:
             if not _llm_alive():
+                log(f"llm failed to start on port {_llm_port}; see logs/llm.log")
                 raise RuntimeError("mlx_lm.server exited during startup; see logs/llm.log")
-            status, _, _ = await asyncio.to_thread(_http, "GET", "/v1/models", None, 2)
-            if status == 200:
+            status, body, _ = await asyncio.to_thread(_http, "GET", "/v1/models", None, 2)
+            if status == 200 and LLM_MODEL.encode() in body:
                 break
+            if time.perf_counter() - t > 60:
+                _stop_llm()
+                log("llm did not become ready within 60s; stopped it")
+                raise RuntimeError("mlx_lm.server did not become ready within 60s")
             await asyncio.sleep(0.2)
-        log(f"llm process up in {time.perf_counter() - t:.1f}s (pid {_llm.pid})")
+        log(f"llm process up on port {_llm_port} in {time.perf_counter() - t:.1f}s (pid {_llm.pid})")
         asyncio.create_task(_prefill())  # load weights + warm the cleanup prompt cache
 
 
