@@ -3,200 +3,418 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>freeflow-local · private dictation for your Mac</title>
-<meta name="description" content="Private, offline dictation for FreeFlow on Apple Silicon. Speech recognition and cleanup run on your Mac; nothing leaves the computer.">
-<meta property="og:title" content="freeflow-local">
-<meta property="og:description" content="Private, offline dictation for FreeFlow on Apple Silicon. Speech recognition and cleanup run on your Mac.">
+<title>freeflow-local · private, context-aware dictation for your Mac</title>
+<meta name="description" content="Speak and it types. Dictation that runs entirely on your Mac: speech-to-text on the Neural Engine, an on-device LLM that reads your screen, under a second from your last word to clean text. Nothing leaves your Mac.">
+<meta property="og:title" content="freeflow-local · Speak. It types. Nothing leaves your Mac.">
+<meta property="og:description" content="Private, context-aware, blazing-fast dictation that runs entirely on Apple Silicon.">
+<meta name="theme-color" content="#07090c">
 <style>
   :root {
-    --bg: #fbfbfa; --surface: #ffffff; --text: #1d1d1f; --muted: #5f6368; --line: #e3e3e0;
-    --accent: #2f6f5e; --accent-soft: #e6f1ed; --code-bg: #f2f2ef; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #121413; --surface: #1a1d1c; --text: #ececea; --muted: #a2a8a5; --line: #2c312f;
-      --accent: #7cc4ad; --accent-soft: #1f2d28; --code-bg: #222624; --shadow: none;
-    }
+    --bg: #07090c; --bg-2: #0d1117; --panel: rgba(255,255,255,.035); --panel-solid: #11161d;
+    --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.14);
+    --text: #f2f5f7; --muted: #9aa6b2; --dim: #6b7682;
+    --mint: #4ff0c3; --cyan: #5cc8ff; --violet: #a78bfa; --amber: #ffcf5c; --red: #ff6b7a;
+    --grad: linear-gradient(100deg, var(--mint) 0%, var(--cyan) 45%, var(--violet) 100%);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
+    margin: 0; background: var(--bg); color: var(--text); overflow-x: hidden;
     font: 17px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--accent); }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
-  header.top { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
-  .brand { font-weight: 650; letter-spacing: -.01em; }
-  .top nav a { margin-left: 18px; color: var(--muted); text-decoration: none; font-size: 15px; }
+  a { color: inherit; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+
+  /* background glow */
+  .glow { position: absolute; inset: 0 0 auto 0; height: 980px; pointer-events: none; overflow: hidden; z-index: 0; }
+  .glow::before, .glow::after { content: ""; position: absolute; border-radius: 50%; filter: blur(90px); opacity: .55; }
+  .glow::before { width: 620px; height: 620px; left: -160px; top: -220px; background: radial-gradient(circle, rgba(79,240,195,.45), transparent 65%); }
+  .glow::after { width: 700px; height: 700px; right: -220px; top: -120px; background: radial-gradient(circle, rgba(167,139,250,.38), transparent 65%); }
+  .gridbg { position: absolute; inset: 0; height: 980px; z-index: 0; pointer-events: none;
+    background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 56px 56px; mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 75%); }
+  main, header.top { position: relative; z-index: 1; }
+
+  /* nav */
+  header.top { position: sticky; top: 0; z-index: 10; backdrop-filter: saturate(140%) blur(14px); -webkit-backdrop-filter: saturate(140%) blur(14px);
+    background: rgba(7,9,12,.6); border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.01em; text-decoration: none; }
+  .brand .dot { width: 22px; height: 22px; border-radius: 7px; background: var(--grad); box-shadow: 0 0 22px rgba(79,240,195,.45); }
+  .top nav { display: flex; align-items: center; gap: 22px; font-size: 15px; }
+  .top nav a { color: var(--muted); text-decoration: none; }
   .top nav a:hover { color: var(--text); }
-  .hero { padding: 56px 0 40px; }
-  .hero h1 { font-size: clamp(34px, 6vw, 54px); line-height: 1.08; letter-spacing: -.025em; margin: 0 0 18px; }
-  .hero p.lede { font-size: clamp(18px, 2.4vw, 21px); color: var(--muted); max-width: 640px; margin: 0 0 28px; }
-  .install {
-    display: flex; align-items: center; gap: 10px; background: var(--code-bg); border: 1px solid var(--line);
-    border-radius: 12px; padding: 12px 12px 12px 16px; max-width: 760px;
-  }
-  .install code { flex: 1; overflow-x: auto; white-space: nowrap; font: 14.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
-  .install button {
-    border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
-    background: var(--accent); color: var(--bg);
-  }
-  .hero .small { color: var(--muted); font-size: 14.5px; margin-top: 12px; }
-  section { padding: 40px 0; border-top: 1px solid var(--line); }
-  h2 { font-size: 26px; letter-spacing: -.015em; margin: 0 0 18px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
-  .grid.two { grid-template-columns: repeat(2, 1fr); }
-  @media (max-width: 640px) { .grid.two { grid-template-columns: 1fr; } }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; box-shadow: var(--shadow); }
-  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 10px; font-weight: 600; font-size: 15px;
+    text-decoration: none; border: 1px solid var(--line-strong); color: var(--text); background: rgba(255,255,255,.04); }
+  .btn:hover { border-color: rgba(255,255,255,.28); }
+  .btn.primary { background: var(--text); color: #05070a; border-color: transparent; }
+
+  /* hero */
+  .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 48px; align-items: center; padding: 84px 0 64px; }
+  .hero > * { min-width: 0; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 99px; font-size: 13.5px; font-weight: 600;
+    color: var(--mint); background: rgba(79,240,195,.08); border: 1px solid rgba(79,240,195,.25); }
+  .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px var(--mint); }
+  h1 { font-size: clamp(42px, 6.6vw, 76px); line-height: 1.02; letter-spacing: -.035em; margin: 22px 0 22px; font-weight: 800; }
+  .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: clamp(18px, 2.1vw, 21px); color: var(--muted); margin: 0 0 30px; max-width: 560px; }
+  .lede b { color: var(--text); font-weight: 600; }
+  .install { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; border-radius: 14px; max-width: 560px;
+    background: rgba(255,255,255,.04); border: 1px solid var(--line-strong); box-shadow: 0 0 0 4px rgba(79,240,195,.05); }
+  .install .prompt { color: var(--mint); font-family: var(--mono); font-size: 14px; }
+  .install code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 13.5px/1.4 var(--mono); color: #dfe7ee; scrollbar-width: none; }
+  .install code::-webkit-scrollbar { display: none; }
+  .install button { border: 0; border-radius: 9px; padding: 10px 16px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+    background: var(--grad); color: #04110d; white-space: nowrap; }
+  .hero .fine { color: var(--dim); font-size: 14px; margin-top: 14px; }
+  .hero .fine a { color: var(--muted); }
+
+  /* demo window */
+  .window { border-radius: 16px; background: linear-gradient(180deg, #121821, #0c1117); border: 1px solid var(--line-strong);
+    box-shadow: 0 40px 120px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02), 0 0 80px rgba(92,200,255,.08); overflow: hidden; }
+  .titlebar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .titlebar span { width: 11px; height: 11px; border-radius: 50%; background: #ff5f57; }
+  .titlebar span:nth-child(2) { background: #febc2e; } .titlebar span:nth-child(3) { background: #28c840; }
+  .titlebar em { margin-left: 10px; font-style: normal; font-size: 12.5px; color: var(--dim); }
+  .screen { padding: 18px 20px 6px; font-size: 14px; color: var(--muted); min-height: 96px; }
+  .screen .term { color: var(--text); background: rgba(92,200,255,.14); border: 1px solid rgba(92,200,255,.35); border-radius: 5px; padding: 0 5px; transition: box-shadow .3s; }
+  .screen .term.hit { box-shadow: 0 0 0 3px rgba(92,200,255,.25), 0 0 24px rgba(92,200,255,.5); }
+  .pipe { padding: 12px 20px 20px; display: grid; gap: 10px; }
+  .row { display: grid; grid-template-columns: 74px 1fr; gap: 12px; align-items: start; font-size: 15px; }
+  .row label { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); padding-top: 3px; }
+  .heard { color: var(--muted); font-family: var(--mono); font-size: 13.5px; min-height: 42px; }
+  .heard s { color: var(--red); text-decoration-thickness: 2px; }
+  .typed { color: var(--text); font-weight: 500; min-height: 46px; }
+  .typed mark { background: none; color: var(--mint); font-weight: 700; }
+  .meter { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 20px 18px; }
+  .pill { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--line-strong); color: var(--muted); }
+  .pill b { color: var(--text); }
+  .pill.live { color: var(--mint); border-color: rgba(79,240,195,.35); }
+  .caret { display: inline-block; width: 2px; height: 1.05em; background: var(--mint); vertical-align: -2px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+    background: var(--panel); margin: 8px 0 24px; }
+  .stat { padding: 26px 24px; border-right: 1px solid var(--line); }
+  .stat:last-child { border-right: 0; }
+  .stat .n { font-size: clamp(34px, 4.4vw, 48px); font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+  .stat .l { color: var(--muted); font-size: 14.5px; margin-top: 10px; }
+
+  /* sections */
+  section { padding: 96px 0 24px; }
+  .kicker { font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+  .k-fast { color: var(--amber); } .k-ctx { color: var(--cyan); } .k-local { color: var(--mint); } .k-next { color: var(--violet); }
+  h2 { font-size: clamp(32px, 4.6vw, 52px); line-height: 1.06; letter-spacing: -.03em; margin: 12px 0 16px; font-weight: 800; max-width: 820px; }
+  .sub { color: var(--muted); font-size: 19px; max-width: 700px; margin: 0 0 36px; }
+
+  /* timeline */
+  .timeline { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); padding: 28px 24px 22px; }
+  .tl { position: relative; display: grid; grid-template-columns: 120px 1fr; row-gap: 14px; column-gap: 16px; align-items: center; font-size: 14px; }
+  .tl .name { color: var(--muted); text-align: right; }
+  .track { position: relative; height: 26px; }
+  .bar { position: absolute; top: 0; height: 26px; border-radius: 7px; display: flex; align-items: center; padding: 0 10px;
+    font-size: 12.5px; font-weight: 700; white-space: nowrap; color: #071015; }
+  .b-talk { left: 0; width: 72%; background: repeating-linear-gradient(90deg, rgba(255,255,255,.12) 0 6px, rgba(255,255,255,.05) 6px 12px); color: var(--text); }
+  .b-load { left: 2%; width: 34%; background: var(--violet); }
+  .b-cache { left: 36%; width: 12%; background: #c4b5fd; }
+  .b-ocr { left: 2%; width: 16%; background: var(--cyan); }
+  .b-asr { left: 72%; width: 3%; background: var(--amber); min-width: 10px; padding: 0; }
+  .b-llm { left: 75%; width: 14%; background: var(--mint); }
+  .stopline { position: absolute; top: -8px; bottom: -8px; left: calc(120px + 16px + (100% - 136px) * .72); width: 2px; background: var(--text); opacity: .7; }
+  .stoplabel { position: absolute; top: -30px; left: calc(120px + 16px + (100% - 136px) * .72); transform: translateX(-50%); font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .tl-foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14.5px; }
+  .tl-foot b { color: var(--text); }
+  .speedgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+
+  /* cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { border: 1px solid var(--line); background: var(--panel); border-radius: 18px; padding: 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 18px; letter-spacing: -.01em; }
   .card p { margin: 0; color: var(--muted); font-size: 15.5px; }
-  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin: 8px 0 18px; }
-  .step { flex: 1 1 160px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-  .step b { display: block; font-size: 15px; }
-  .step span { color: var(--muted); font-size: 14px; }
-  .step .chip { display: inline-block; margin-top: 8px; font-size: 12.5px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
-  .arrow { align-self: center; color: var(--muted); }
-  table { border-collapse: collapse; width: 100%; max-width: 640px; font-size: 15.5px; }
-  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; font-size: 14px; }
-  td.num { font-variant-numeric: tabular-nums; }
-  ul.plain { padding-left: 20px; margin: 0; }
-  ul.plain li { margin: 6px 0; }
-  .note { color: var(--muted); font-size: 15px; }
-  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font: 14px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
-  footer { padding: 32px 0 48px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
-  @media (max-width: 600px) {
-    .top nav a:not(.gh) { display: none; }
-    .arrow { display: none; }
-    .install { flex-direction: column; align-items: stretch; }
+  .card .big { font-size: 34px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 6px; }
+  .ba { display: grid; gap: 8px; margin-top: 14px; }
+  .ba div { border-radius: 10px; padding: 10px 12px; font-size: 14.5px; line-height: 1.45; }
+  .ba .in { background: rgba(255,107,122,.07); border: 1px solid rgba(255,107,122,.2); color: #d9b6bb; font-family: var(--mono); font-size: 13px; }
+  .ba .out { background: rgba(79,240,195,.07); border: 1px solid rgba(79,240,195,.22); color: var(--text); }
+  .ba .out mark { background: none; color: var(--mint); font-weight: 700; }
+  .ba small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .65; margin-bottom: 3px; font-family: inherit; }
+  .ctxlist { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+  .icon { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; margin-bottom: 14px; background: rgba(255,255,255,.05); border: 1px solid var(--line); }
+  .icon svg { width: 21px; height: 21px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .c-mint { color: var(--mint); } .c-cyan { color: var(--cyan); } .c-violet { color: var(--violet); } .c-amber { color: var(--amber); }
+  .note { color: var(--dim); font-size: 13.5px; margin-top: 14px; }
+
+  /* local */
+  .localgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+  /* stack */
+  .stack { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .chip { display: inline-block; margin-top: 12px; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 99px; background: rgba(255,255,255,.06); color: var(--text); border: 1px solid var(--line-strong); }
+
+  /* final cta */
+  .final { text-align: center; padding: 110px 0 90px; }
+  .final h2 { margin-left: auto; margin-right: auto; }
+  .final .install { margin: 28px auto 0; text-align: left; }
+  .final .links { margin-top: 18px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  footer { border-top: 1px solid var(--line); color: var(--dim); font-size: 13.5px; padding: 28px 0 44px; position: relative; z-index: 1; }
+
+  @media (max-width: 960px) {
+    .hero { grid-template-columns: minmax(0, 1fr); padding-top: 56px; }
+    .cards, .ctxlist, .localgrid, .stack, .speedgrid { grid-template-columns: 1fr 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stat:nth-child(2) { border-right: 0; }
+    .stat:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   }
+  @media (max-width: 640px) {
+    .top nav a.hide-sm { display: none; }
+    .cards, .ctxlist, .localgrid, .stack, .speedgrid { grid-template-columns: 1fr; }
+    .tl { grid-template-columns: 78px 1fr; font-size: 12.5px; }
+    .stopline, .stoplabel { left: calc(78px + 16px + (100% - 94px) * .72); }
+    .bar { font-size: 0; padding: 0; }
+    section { padding-top: 72px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .caret { animation: none; } html { scroll-behavior: auto; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div class="brand">freeflow-local</div>
-    <nav>
-      <a href="#how">How it works</a>
-      <a href="#privacy">Privacy</a>
-      <a href="#roadmap">Roadmap</a>
-      <a class="gh" href="https://github.com/ayushpatnaikgit/freeflow-local">GitHub</a>
-    </nav>
-  </header>
+<div class="glow"></div><div class="gridbg"></div>
 
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><span class="dot"></span>freeflow-local</a>
+    <nav>
+      <a class="hide-sm" href="#fast">Speed</a>
+      <a class="hide-sm" href="#context">Context</a>
+      <a class="hide-sm" href="#local">Privacy</a>
+      <a class="btn" href="https://github.com/ayushpatnaikgit/freeflow-local">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap">
   <div class="hero">
-    <h1>Dictation that never leaves your Mac.</h1>
-    <p class="lede">Hold a key, speak, and clean, punctuated text appears wherever you're typing. Speech recognition and
-      cleanup both run on your Mac's own chips: no cloud, no account, and it works offline. It powers
-      <a href="https://github.com/zachlatta/freeflow">FreeFlow</a>, the free and open-source dictation app.</p>
-    <div class="install">
-      <code id="cmd">curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh</code>
-      <button type="button" id="copy">Copy</button>
+    <div>
+      <span class="eyebrow"><i></i>100% on-device · Apple Silicon</span>
+      <h1>Speak. It types.<br><span class="grad">Nothing leaves your Mac.</span></h1>
+      <p class="lede">Dictation that runs <b>entirely on your Mac</b>: transcribed on the Neural Engine in a blink, polished by
+        an on-device AI that <b>reads your screen</b> to get names and jargon right. <b>Under a second</b> from your last word
+        to clean text. No cloud. No account. No internet needed.</p>
+      <div class="install">
+        <span class="prompt">$</span>
+        <code id="cmd">curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh</code>
+        <button type="button" class="copy">Copy</button>
+      </div>
+      <p class="fine">One line in Terminal. Free and open source. Works with <a href="https://github.com/zachlatta/freeflow">FreeFlow</a> ·
+        Apple Silicon, macOS 14+, 16 GB RAM.</p>
     </div>
-    <p class="small">Paste into Terminal. Needs an Apple Silicon Mac on macOS 14 or later, 16 GB of RAM and about 6 GB of
-      disk. Install <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg">FreeFlow</a> first.</p>
+
+    <div class="window" aria-label="Example: a misheard word fixed using the screen">
+      <div class="titlebar"><span></span><span></span><span></span><em id="app">Notes · on your screen</em></div>
+      <div class="screen" id="screen">Plan for Friday: train a <span class="term hit">LoRA</span> adapter on Gemma, then benchmark it with <span class="term">MLX</span>.</div>
+      <div class="pipe">
+        <div class="row"><label>Heard</label><div class="heard" id="heard">I think the <s>Laura</s> fine tune might be good.</div></div>
+        <div class="row"><label>Typed</label><div class="typed" id="typed">I think the <mark>LoRA</mark> fine tune might be good.<span class="caret"></span></div></div>
+      </div>
+      <div class="meter">
+        <span class="pill live">● on-device</span>
+        <span class="pill">speech-to-text <b>~0.15 s</b></span>
+        <span class="pill">screen words <b id="sw">LoRA</b></span>
+      </div>
+    </div>
   </div>
 
-  <section>
-    <h2>What you get</h2>
-    <div class="grid two">
-      <div class="card"><h3>Accurate speech-to-text</h3><p>Orukeet, a multilingual fine-tune of NVIDIA Parakeet, running on
-        the Apple Neural Engine in about 0.1–0.2 s per dictation.</p></div>
-      <div class="card"><h3>Reads like you typed it</h3><p>Google's Gemma 4 removes fillers and false starts, fixes
-        punctuation, formats emails and uses your custom vocabulary.</p></div>
-      <div class="card"><h3>Spells what's on screen</h3><p>Names and terms visible in the window you're dictating into are
-        spelled right, even when misheard: "Laura" becomes "LoRA".</p></div>
-      <div class="card"><h3>Light on memory</h3><p>Models load when you start speaking and unload after 10 idle minutes.
-        Open source under Apache 2.0.</p></div>
+  <div class="stats">
+    <div class="stat"><div class="n grad">~0.15 s</div><div class="l">speech-to-text on the Apple Neural Engine</div></div>
+    <div class="stat"><div class="n">&lt; 1 s</div><div class="l">from your last word to clean, punctuated text, once warm</div></div>
+    <div class="stat"><div class="n">0 bytes</div><div class="l">of your voice, text or screen sent anywhere</div></div>
+    <div class="stat"><div class="n">100%</div><div class="l">offline once installed. No account, no API key, no bill</div></div>
+  </div>
+
+  <section id="fast">
+    <span class="kicker k-fast">Blazing fast</span>
+    <h2>The slow parts happen while you're still talking.</h2>
+    <p class="sub">The moment you start recording, the models wake up, the cleanup instructions are cached and your screen
+      is read. By the time you stop, all that's left is the fast part.</p>
+    <div class="timeline" role="img" aria-label="Timeline: loading, caching and screen reading overlap with speaking; after you stop, transcription takes about 0.15 s and cleanup under a second">
+      <div class="tl">
+        <span class="stopline"></span><span class="stoplabel">you stop talking</span>
+        <span class="name">You</span><div class="track"><div class="bar b-talk">speaking…</div></div>
+        <span class="name">Models</span><div class="track"><div class="bar b-load">wake up</div><div class="bar b-cache">cache</div></div>
+        <span class="name">Screen</span><div class="track"><div class="bar b-ocr">read</div></div>
+        <span class="name">Speech</span><div class="track"><div class="bar b-asr" title="~0.15 s"></div></div>
+        <span class="name">Polish</span><div class="track"><div class="bar b-llm">clean up</div></div>
+      </div>
+      <div class="tl-foot"><span>Warm, after you stop: <b>~0.9 s</b> to finished text</span><span>Speech-to-text: <b>~0.15 s</b></span><span>Models idle out after 10 min, so memory is free when you're not dictating</span></div>
+    </div>
+    <div class="speedgrid">
+      <div class="card"><div class="big grad">Neural Engine</div><p>Speech recognition runs on Apple's dedicated, power-efficient AI chip, leaving the GPU
+        free for cleanup.</p></div>
+      <div class="card"><div class="big">On demand</div><p>Nothing sits in memory while you're not dictating. A 10-minute break costs
+        under a second extra, because loading overlaps your speech.</p></div>
+      <div class="card"><div class="big">No round trip</div><p>No upload, no queue, no server on the other side of the world. Your Mac
+        is the whole pipeline.</p></div>
     </div>
   </section>
 
-  <section id="how">
-    <h2>How it works</h2>
-    <div class="flow">
-      <div class="step"><b>You start recording</b><span>Models start loading and the screen is read while you speak.</span></div>
-      <div class="arrow">→</div>
-      <div class="step"><b>Speech to text</b><span>Orukeet transcribes your audio.</span><br><span class="chip">Neural Engine</span></div>
-      <div class="arrow">→</div>
-      <div class="step"><b>Cleanup</b><span>Gemma 4 E4B tidies the text, using your vocabulary and on-screen words.</span><br><span class="chip">GPU, via MLX</span></div>
-      <div class="arrow">→</div>
-      <div class="step"><b>Your text</b><span>FreeFlow pastes it where you're typing.</span></div>
+  <section id="context">
+    <span class="kicker k-ctx">Context-aware</span>
+    <h2>It knows what's on your screen.</h2>
+    <p class="sub">Speech models turn rare words into common ones. freeflow-local reads the window you're dictating into,
+      on device, and spells your names, products and jargon the way they're written there.</p>
+    <div class="cards">
+      <div class="card"><h3>Names</h3><p>Colleagues and tools, spelled like your screen spells them.</p>
+        <div class="ba"><div class="in"><small>Heard</small>Ask Sid hunt to check the graph Ana dashboard.</div>
+          <div class="out"><small>Typed</small>Ask <mark>Siddhant</mark> to check the <mark>Grafana</mark> dashboard.</div></div></div>
+      <div class="card"><h3>Jargon</h3><p>Technical terms stop turning into nonsense.</p>
+        <div class="ba"><div class="in"><small>Heard</small>We store the vectors in post gress with PG vector on super base.</div>
+          <div class="out"><small>Typed</small>We store the vectors in <mark>Postgres</mark> with <mark>pgvector</mark> on <mark>Supabase</mark>.</div></div></div>
+      <div class="card"><h3>Places</h3><p>Even the long ones.</p>
+        <div class="ba"><div class="in"><small>Heard</small>The Tiruchi rapalli office needs six new laptops.</div>
+          <div class="out"><small>Typed</small>The <mark>Tiruchirappalli</mark> office needs six new laptops.</div></div></div>
     </div>
-    <p class="note">The backend is a small local server that speaks the same API FreeFlow uses for cloud services, so
-      FreeFlow needs no changes. It listens only on your own machine (127.0.0.1).</p>
+    <div class="ctxlist">
+      <div class="card"><div class="icon c-cyan"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+        <h3>Reads your screen</h3><p>Only words that sound like something you said are used, so it fixes mishearings and never inserts words you didn't say.</p></div>
+      <div class="card"><div class="icon c-violet"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M4 7l8 6 8-6"/></svg></div>
+        <h3>Knows the app</h3><p>It knows where you're typing, so an email gets a greeting line and paragraphs while a chat message stays casual.</p></div>
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><path d="M4 19V5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M8 7h6M8 11h6"/></svg></div>
+        <h3>Your vocabulary</h3><p>Terms you add in FreeFlow are always spelled your way, for the words you use every day.</p></div>
+    </div>
+    <div class="cards" style="margin-top:16px">
+      <div class="card"><h3>Cleans the ums out</h3>
+        <div class="ba"><div class="in"><small>Heard</small>Can you, can you send me the, the slides from yesterday's talk?</div>
+          <div class="out"><small>Typed</small>Can you send me the slides from yesterday's talk?</div></div></div>
+      <div class="card"><h3>Speaks developer</h3>
+        <div class="ba"><div class="in"><small>Heard</small>Use kubectl get pods dash n staging to check if the OAuth proxy restarted.</div>
+          <div class="out"><small>Typed</small>Use kubectl get pods <mark>-n</mark> staging to check if the OAuth proxy restarted.</div></div></div>
+      <div class="card"><h3>Never takes orders</h3>
+        <div class="ba"><div class="in"><small>Heard</small>write an email to the team saying the release is delayed until monday</div>
+          <div class="out"><small>Typed</small>Write an email to the team saying the release is delayed until Monday.</div></div>
+        <p style="margin-top:10px;font-size:14px">It types what you said. It doesn't go off and write the email.</p></div>
+    </div>
+    <p class="note">Examples are real outputs from our test suite with the default model, Gemma 4 E4B, where the right spelling was visible on screen.</p>
   </section>
 
-  <section>
-    <h2>Speed</h2>
-    <table>
-      <thead><tr><th>Time from when you stop speaking</th><th>Gemma 4 E4B (default)</th><th>Gemma 4 E2B</th></tr></thead>
-      <tbody>
-        <tr><td>Warm (dictated in the last 10 minutes)</td><td class="num">~0.9 s</td><td class="num">~0.5 s</td></tr>
-        <tr><td>First dictation after a 10-minute break</td><td class="num">~1.8 s</td><td class="num">~0.6 s</td></tr>
-      </tbody>
-    </table>
-    <p class="note">M4 Mac, 24 GB, 6 s of speech. The first dictation after a restart takes a few seconds more; long
-      dictations take longer because the whole text is rewritten. Switch models with
-      <code>freeflowctl model e2b</code>: faster, but it follows instructions less well.</p>
-  </section>
-
-  <section>
-    <h2>Screen words</h2>
-    <p>Speech recognition turns rare words into common ones. With FreeFlow's Screen Recording permission, the backend
-      reads the active window with Apple's on-device text recognition, picks out unusual words (names, acronyms,
-      technical terms) and gives the cleanup model only the ones that sound like something you said.</p>
-    <ul class="plain">
-      <li>In tests, misheard on-screen names and terms were fixed 13 times out of 16, against 7 without it, with no change on 77 other dictations.</li>
-      <li>Best for names and terms misheard as other words. For code-like tokens and words you use often, add them to FreeFlow's custom vocabulary.</li>
-      <li>Optional: turn it off with <code>freeflowctl screen-words off</code> or by not granting Screen Recording.</li>
-    </ul>
-  </section>
-
-  <section id="privacy">
-    <h2>Privacy</h2>
-    <ul class="plain">
-      <li>Audio, transcripts, screenshots and cleaned text are processed on your Mac and not sent anywhere.</li>
-      <li>Screenshots and the words read from them stay in memory, are never written to disk, and are discarded after each dictation.</li>
-      <li>Logs contain timings and counts, never what you said or what was on screen.</li>
-      <li>Models are downloaded once from Hugging Face; after that it runs offline.</li>
-    </ul>
-  </section>
-
-  <section id="roadmap">
-    <h2>Where this is going</h2>
-    <div class="grid">
-      <div class="card"><h3>Neural Engine first</h3><p>Run as much as possible on the Neural Engine: speech already does;
-        next the screenshot reading and, as Apple's on-device tools mature, the cleanup model itself.</p></div>
-      <div class="card"><h3>Much faster with newer models</h3><p>The cleanup model is one setting. Every new candidate is
-        measured on the same test dictations before it becomes the default, with long dictations the main target.</p></div>
-      <div class="card"><h3>Fine-tuned for dictation</h3><p>A small adapter trained on FreeFlow's exact requests, so a
-        smaller, faster model can match today's quality. Trained on synthetic and public data only.</p></div>
+  <section id="local">
+    <span class="kicker k-local">Truly local</span>
+    <h2>Your voice is yours. Full stop.</h2>
+    <p class="sub">Most dictation sends your voice to someone else's computer. This one doesn't have anywhere to send it.</p>
+    <div class="localgrid">
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M7 18h10a4 4 0 0 0 1.5-7.7A6 6 0 0 0 7.2 8.1"/><path d="M4.6 9.6A4.5 4.5 0 0 0 7 18"/></svg></div>
+        <h3>No cloud</h3><p>Audio, transcripts, screenshots and finished text are processed on your Mac and never uploaded.</p></div>
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M3 3l18 18"/></svg></div>
+        <h3>No account</h3><p>No sign-up, no API key, no subscription, no usage limits.</p></div>
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 20 0"/><path d="M5.5 12.4a10 10 0 0 1 13 0"/><path d="M9 16a5 5 0 0 1 6 0"/><path d="M3 3l18 18"/></svg></div>
+        <h3>Works offline</h3><p>On a plane, on bad Wi-Fi, in airplane mode. Models download once, then it runs offline.</p></div>
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8"/></svg></div>
+        <h3>Screens stay in memory</h3><p>Screenshots and the words read from them are never written to disk and are thrown away after each dictation.</p></div>
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h3"/></svg></div>
+        <h3>Logs keep counts, not words</h3><p>Timings and numbers only. Never what you said, never what was on screen.</p></div>
+      <div class="card"><div class="icon c-mint"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg></div>
+        <h3>Open source</h3><p>Apache 2.0. Read every line, or change it. The backend only listens on your own machine.</p></div>
     </div>
   </section>
 
   <section>
-    <h2>Commands</h2>
-<pre>~/Library/Application\ Support/FreeFlowLocal/freeflowctl status
-freeflowctl model e4b|e2b|&lt;id&gt;     # change the cleanup model
-freeflowctl ane on|off             # speech-to-text on the Neural Engine or the GPU
-freeflowctl screen-words on|off    # spell on-screen words
-freeflowctl uninstall              # remove it from login</pre>
-    <p class="note">Full documentation, troubleshooting and source: <a href="https://github.com/ayushpatnaikgit/freeflow-local#readme">README on GitHub</a>.</p>
+    <span class="kicker k-fast">Under the hood</span>
+    <h2>Leading open models, tuned for your Mac.</h2>
+    <div class="stack">
+      <div class="card"><h3>Orukeet</h3><p>A multilingual fine-tune of NVIDIA Parakeet TDT 0.6B, run through Core ML on the
+        Neural Engine.</p><span class="chip">Neural Engine · Core ML</span></div>
+      <div class="card"><h3>Gemma 4 E4B</h3><p>Google's on-device language model cleans up and formats, loaded on demand through
+        Apple's MLX.</p><span class="chip">GPU · MLX</span></div>
+      <div class="card"><h3>Apple Vision</h3><p>On-device text recognition reads the window you're dictating into, tuned to catch
+        small editor text.</p><span class="chip">On-device OCR</span></div>
+    </div>
   </section>
 
-  <footer>
-    Apache License 2.0. Model weights keep their own licences: Orukeet is CC BY-SA 4.0 (Oruk AI), Gemma 4 is Apache 2.0
-    (Google). Not affiliated with FreeFlow, Oruk AI, NVIDIA, Google or Apple.
-  </footer>
+  <section id="next">
+    <span class="kicker k-next">Where it's going</span>
+    <h2>Faster with every new model.</h2>
+    <div class="cards">
+      <div class="card"><div class="icon c-violet"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg></div>
+        <h3>Neural Engine first</h3><p>Move as much as possible onto Apple's AI chip: screen reading next, and the cleanup model
+        as Apple's on-device tools mature.</p></div>
+      <div class="card"><div class="icon c-amber"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
+        <h3>Much faster cleanup</h3><p>Swap in better small models as they ship, each one measured on the same test dictations.
+        Parallel cleanup already made long dictations twice as fast in testing.</p></div>
+      <div class="card"><div class="icon c-cyan"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg></div>
+        <h3>Fine-tuned for dictation</h3><p>An adapter trained on dictation itself, so a smaller, faster model matches today's
+        quality. Synthetic and public data only.</p></div>
+    </div>
+  </section>
+
+  <div class="final">
+    <h2>Talk to your Mac.<br><span class="grad">Keep it between you two.</span></h2>
+    <div class="install">
+      <span class="prompt">$</span>
+      <code>curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh</code>
+      <button type="button" class="copy">Copy</button>
+    </div>
+    <div class="links">
+      <a class="btn primary" href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg">Get FreeFlow first</a>
+      <a class="btn" href="https://github.com/ayushpatnaikgit/freeflow-local#readme">Docs &amp; source</a>
+    </div>
+  </div>
 </div>
+</main>
+
+<footer>
+  <div class="wrap">Apache License 2.0. Model weights keep their own licences: Orukeet is CC BY-SA 4.0 (Oruk AI), Gemma 4 is
+    Apache 2.0 (Google). Timings measured on an M4 Mac with 24 GB of RAM and 6 s of speech. Not affiliated with FreeFlow,
+    Oruk AI, NVIDIA, Google or Apple.</div>
+</footer>
+
 <script>
-  document.getElementById("copy").addEventListener("click", function () {
-    var button = this, text = document.getElementById("cmd").textContent;
-    function done(ok) { button.textContent = ok ? "Copied" : "Select and copy"; setTimeout(function () { button.textContent = "Copy"; }, 1800); }
-    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); }); }
-    else { done(false); }
+  // Copy buttons
+  document.querySelectorAll(".copy").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var text = document.getElementById("cmd").textContent;
+      function done(ok) { button.textContent = ok ? "Copied ✓" : "Select & copy"; setTimeout(function () { button.textContent = "Copy"; }, 1800); }
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+      else done(false);
+    });
   });
+
+  // Hero demo: real examples from the test suite, cycling. Static first frame works without JavaScript.
+  var demos = [
+    { app: "Notes · on your screen", screen: 'Plan for Friday: train a <span class="term">LoRA</span> adapter on Gemma, then benchmark it with <span class="term">MLX</span>.',
+      heard: ["I think the ", "Laura", " fine tune might be good."], fixed: "LoRA", sw: "LoRA" },
+    { app: "Slack · #infra", screen: '<span class="term">Siddhant</span>: deploy is green. Latency graphs are in <span class="term">Grafana</span>.',
+      heard: ["Ask ", "Sid hunt", " to check the graph Ana dashboard."], fixed: "Siddhant", sw: "Siddhant, Grafana",
+      typed: 'Ask <mark>Siddhant</mark> to check the <mark>Grafana</mark> dashboard.' },
+    { app: "Docs · architecture.md", screen: 'Storage: <span class="term">Postgres</span> + <span class="term">pgvector</span>, hosted on <span class="term">Supabase</span>.',
+      heard: ["We store the vectors in ", "post gress", " with PG vector on super base."], fixed: "Postgres", sw: "Postgres, pgvector, Supabase",
+      typed: 'We store the vectors in <mark>Postgres</mark> with <mark>pgvector</mark> on <mark>Supabase</mark>.' }
+  ];
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var el = { app: document.getElementById("app"), screen: document.getElementById("screen"), heard: document.getElementById("heard"),
+             typed: document.getElementById("typed"), sw: document.getElementById("sw") };
+  var i = 0;
+  function show(d) {
+    el.app.textContent = d.app;
+    el.screen.innerHTML = d.screen;
+    el.sw.textContent = d.sw;
+    el.heard.innerHTML = d.heard[0] + "<s>" + d.heard[1] + "</s>" + d.heard[2];
+    var html = d.typed || (d.heard[0] + "<mark>" + d.fixed + "</mark>" + d.heard[2]);
+    var plain = html.replace(/<[^>]+>/g, "");
+    if (reduce) { el.typed.innerHTML = html; highlight(); return; }
+    var n = 0; el.typed.innerHTML = '<span class="caret"></span>';
+    var t = setInterval(function () {
+      n += 2;
+      if (n >= plain.length) { clearInterval(t); el.typed.innerHTML = html + '<span class="caret"></span>'; highlight(); return; }
+      el.typed.innerHTML = plain.slice(0, n) + '<span class="caret"></span>';
+    }, 28);
+  }
+  function highlight() { el.screen.querySelectorAll(".term").forEach(function (t) { t.classList.add("hit"); }); }
+  if (!reduce) {
+    setInterval(function () { i = (i + 1) % demos.length; show(demos[i]); }, 5200);
+  }
 </script>
 </body>
 </html>
