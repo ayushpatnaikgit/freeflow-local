@@ -7,11 +7,20 @@
 #   freeflowctl restart     restart the backend (models reload on the next dictation)
 #   freeflowctl logs        follow the logs
 #   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
+#   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
 set -euo pipefail
 D="${0:A:h}"
 URL="http://127.0.0.1:8081/v1"
 SETTINGS="$HOME/Library/Application Support/FreeFlow/.settings"
 LABEL=com.freeflow.local
+BACKEND_SETTINGS="$D/settings.env"
+
+set_setting() {  # set_setting KEY VALUE in settings.env (read by the server at start)
+  touch "$BACKEND_SETTINGS"
+  grep -v "^$1=" "$BACKEND_SETTINGS" > "$BACKEND_SETTINGS.tmp" || true
+  echo "$1=$2" >> "$BACKEND_SETTINGS.tmp"
+  mv "$BACKEND_SETTINGS.tmp" "$BACKEND_SETTINGS"
+}
 
 case "${1:-status}" in
   install)   "$D/install-autostart.sh" ;;
@@ -20,6 +29,14 @@ case "${1:-status}" in
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Restarted. Models load on the next dictation." ;;
   logs) tail -n 20 -f "$D/logs/server.log" "$D/logs/llm.log" ;;
+  ane)
+    case "${2:-}" in
+      on)  "$D/setup-ane.sh" && set_setting ASR_BACKEND ane ;;
+      off) set_setting ASR_BACKEND mlx ;;
+      *) echo "usage: freeflowctl ane on|off" >&2; exit 1 ;;
+    esac
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Speech-to-text: $([[ $2 == on ]] && echo "Neural Engine (Core ML)" || echo "GPU (MLX)"). Backend restarted." ;;
   status)
     if info=$(launchctl print "gui/$UID/$LABEL" 2>/dev/null); then
       state=$(print -r -- "$info" | awk -F' = ' '/^\tstate =/{print $2; exit}')
@@ -36,7 +53,8 @@ except Exception:
     sys.exit(print("server: down"))
 idle = h.get("idle_unload_after", 0)
 print("server: up")
-print("speech model:", "loaded" if h.get("asr_loaded", h.get("ok")) else "unloaded")
+where = {"ane": "Neural Engine", "mlx": "GPU/MLX"}.get(h.get("asr_backend", "mlx"), "?")
+print("speech model:", f"loaded ({where})" if h.get("asr_loaded", h.get("ok")) else f"unloaded ({where} when loaded)")
 print("cleanup LLM: ", "loaded" if h.get("llm_running") else "unloaded")
 secs = h.get("idle_seconds", "?")
 print(f"idle for {secs}s; unloads after", f"{idle:.0f}s" if idle > 0 else "never (always warm)")' || true
@@ -58,5 +76,5 @@ with os.fdopen(fd, "w") as f:
 print("FreeFlow API Base URL ->", url)
 EOF
     open -a FreeFlow ;;
-  *) sed -n '2,8p' "$0"; exit 1 ;;
+  *) sed -n '2,10p' "$0"; exit 1 ;;
 esac

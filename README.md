@@ -73,6 +73,21 @@ cd ~/Library/Application\ Support/FreeFlowLocal
 
 Change the idle timeout, for example to 15 minutes: `IDLE_UNLOAD_SECONDS=900 ./freeflowctl install`.
 
+## Optional: speech-to-text on the Neural Engine
+
+```sh
+~/Library/Application\ Support/FreeFlowLocal/freeflowctl ane on    # back to the GPU: freeflowctl ane off
+```
+
+This runs Orukeet with Core ML on the Apple Neural Engine instead of MLX on the GPU, using Oruk AI's official
+Core ML build (6-bit weights). It needs the Xcode Command Line Tools (`xcode-select --install`), downloads about
+470 MB, and compiles the model for your Mac once (about 15 s).
+
+Measured on an M4: speech-to-text takes about 60–80 ms instead of 150–250 ms, loads in 0.16 s instead of 1–7 s,
+and leaves the GPU free for the cleanup model. Text matched the MLX version on 99% of words (924 words, 24
+recordings, up to 2 minutes long); the differences were number spellings ("8" vs "eight"), apostrophes and one
+misheard word. If the Neural Engine helper fails, the backend falls back to MLX automatically.
+
 ## How it works
 
 FreeFlow talks to any OpenAI-compatible API. This backend serves one on `http://127.0.0.1:8081/v1`:

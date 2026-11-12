@@ -1,7 +1,8 @@
-"""Local backend for FreeFlow: Orukeet ASR on MLX, plus an on-demand Gemma cleanup LLM.
+"""Local backend for FreeFlow: Orukeet ASR (MLX or Neural Engine), plus an on-demand Gemma cleanup LLM.
 
 One OpenAI-compatible endpoint (FreeFlow's API Base URL):
-  /v1/audio/transcriptions  Orukeet (Parakeet TDT v3 fine-tune) via parakeet-mlx + fast_tdt
+  /v1/audio/transcriptions  Orukeet (Parakeet TDT v3 fine-tune) via parakeet-mlx + fast_tdt on the GPU,
+                            or via the orukeet-ane Core ML helper on the Neural Engine (ASR_BACKEND=ane)
   /v1/chat/completions      forwarded to an mlx_lm.server child process, model pinned
 
 Models load on demand and unload after IDLE_UNLOAD_SECONDS without requests. FreeFlow sends
@@ -37,6 +38,22 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 import fast_tdt
 
 HERE = Path(__file__).resolve().parent
+
+
+def _load_settings(path: Path) -> None:
+    """KEY=VALUE lines from settings.env (written by `freeflowctl`) override the environment."""
+    if path.exists():
+        for line in path.read_text().splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and key and not key.startswith("#"):
+                os.environ[key.strip()] = value.strip()
+
+
+_load_settings(HERE / "settings.env")
+ASR_BACKEND = os.environ.get("ASR_BACKEND", "mlx")  # "mlx" (GPU) or "ane" (Neural Engine via Core ML)
+ANE_BUNDLE = HERE / "coreml" / "orukeet-r3-coreml-greedy"
+ANE_CACHE = HERE / "coreml" / "compiled"
+ANE_HELPER = HERE / "bin" / "orukeet-ane"
 ASR_MODEL = os.environ.get("ASR_MODEL", "itsreidar/orukeet-mlx")
 LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
@@ -51,11 +68,68 @@ def log(msg: str) -> None:
 
 # ---------------------------------------------------------------- ASR (in-process)
 
-_mlx = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
+_mlx = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")  # all ASR work runs on this thread
 _asr = None
 
 
+class _AneHelper:
+    """The orukeet-ane Swift process: one WAV path per line in, one JSON line out."""
+
+    def __init__(self) -> None:
+        t = time.perf_counter()
+        self.proc = subprocess.Popen([str(ANE_HELPER), str(ANE_BUNDLE), str(ANE_CACHE)],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=HERE)
+        ready = json.loads(self.proc.stdout.readline() or '{"error": "helper exited"}')
+        if not ready.get("ready"):
+            self.close()
+            raise RuntimeError(ready.get("error", "orukeet-ane did not start"))
+        log(f"asr (Neural Engine) loaded in {time.perf_counter() - t:.2f}s")
+
+    def transcribe(self, path: str) -> str:
+        with wave.open(path, "rb") as w:
+            ok = w.getnchannels() == 1 and w.getsampwidth() == 2 and w.getframerate() == 16000
+        if not ok:
+            raise ValueError("Neural Engine path needs 16 kHz mono 16-bit WAV")
+        self.proc.stdin.write(path + "\n")
+        self.proc.stdin.flush()
+        reply = json.loads(self.proc.stdout.readline() or '{"error": "helper exited"}')
+        if "error" in reply:
+            raise RuntimeError(reply["error"])
+        return reply["text"]
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
+_ane: _AneHelper | None = None
+_ane_failed = False  # after a failure, stay on MLX until restart
+
+
+def _ane_wanted() -> bool:
+    return ASR_BACKEND == "ane" and not _ane_failed and ANE_HELPER.exists() and ANE_BUNDLE.exists()
+
+
 def _load_asr() -> None:
+    """Load the configured speech model: the Neural Engine helper, or MLX if that is off or fails."""
+    global _ane, _ane_failed
+    if _ane_wanted():
+        if _ane is None:
+            try:
+                _ane = _AneHelper()
+            except Exception as e:  # noqa: BLE001 - any helper failure falls back to MLX
+                _ane_failed = True
+                log(f"Neural Engine ASR unavailable ({e}); using MLX")
+        if _ane is not None:
+            return
+    _load_mlx_asr()
+
+
+def _load_mlx_asr() -> None:
     global _asr
     if _asr is not None:
         return
@@ -74,19 +148,35 @@ def _load_asr() -> None:
 
 
 def _unload_asr() -> None:
-    global _asr
-    if _asr is None:
-        return
-    _asr = None
-    gc.collect()
-    mx.clear_cache()
-    log("asr unloaded")
+    global _asr, _ane
+    if _ane is not None:
+        _ane.close()
+        _ane = None
+        log("asr (Neural Engine) unloaded")
+    if _asr is not None:
+        _asr = None
+        gc.collect()
+        mx.clear_cache()
+        log("asr unloaded")
 
 
 def _transcribe(path: str) -> str:
+    global _ane, _ane_failed
     _load_asr()
-    text = fast_tdt.transcribe(_asr, path, chunk_seconds=CHUNK_SECONDS)
-    mx.clear_cache()
+    text = None
+    if _ane is not None:
+        try:
+            text = _ane.transcribe(path)
+        except ValueError:
+            pass  # not 16 kHz mono WAV: MLX reads any format via ffmpeg
+        except Exception as e:  # noqa: BLE001
+            log(f"Neural Engine ASR failed ({e}); using MLX from now on")
+            _ane.close()
+            _ane, _ane_failed = None, True
+    if text is None:
+        _load_mlx_asr()
+        text = fast_tdt.transcribe(_asr, path, chunk_seconds=CHUNK_SECONDS)
+        mx.clear_cache()
     return strip_fillers(text) if STRIP_FILLERS else text
 
 
@@ -217,7 +307,7 @@ class _Activity:
 def _wake() -> None:
     """Start loading both models in the background without waiting."""
     loop = asyncio.get_running_loop()
-    if _asr is None:
+    if _asr is None and _ane is None:
         loop.run_in_executor(_mlx, _load_asr)
     if not _llm_alive():
         asyncio.create_task(_ensure_llm())
@@ -230,7 +320,7 @@ async def _idle_watch() -> None:
             continue
         if time.monotonic() - _last_activity < IDLE_UNLOAD_SECONDS:
             continue
-        if _llm is not None or _asr is not None:
+        if _llm is not None or _asr is not None or _ane is not None:
             log(f"idle for {IDLE_UNLOAD_SECONDS:.0f}s: unloading")
             async with _llm_lock:
                 _stop_llm()
@@ -262,7 +352,9 @@ async def models():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "asr_loaded": _asr is not None, "llm_running": _llm_alive(),
+    return {"ok": True, "asr_loaded": _asr is not None or _ane is not None,
+            "asr_backend": "ane" if _ane is not None else ("mlx" if _asr is not None else ASR_BACKEND),
+            "llm_running": _llm_alive(),
             "idle_seconds": round(time.monotonic() - _last_activity),
             "idle_unload_after": IDLE_UNLOAD_SECONDS, "asr_model": ASR_MODEL, "llm_model": LLM_MODEL}
 

@@ -37,13 +37,13 @@ if ! command -v uv >/dev/null; then
 fi
 
 echo "Installing to: $DEST"
-mkdir -p "$DEST/logs"
+mkdir -p "$DEST/logs" "$DEST/ane"
 rm -f "$DEST/parakeet_server.py"  # renamed to server.py in 0.1.0
-for f in server.py fast_tdt.py freeflowctl install-autostart.sh start.sh bench_fast.py \
-         pyproject.toml uv.lock README.md LICENSE NOTICE; do
+for f in server.py fast_tdt.py freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
+         ane/orukeet_ane.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
-chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh"
+chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh" "$DEST/setup-ane.sh"
 
 cd "$DEST"
 echo "Setting up Python environment..."
@@ -56,6 +56,11 @@ for model in "$ASR_MODEL" "$LLM_MODEL"; do
     exit 1
   fi
 done
+
+# Neural Engine speech-to-text was switched on earlier (freeflowctl ane on): rebuild its helper for this version.
+if grep -qx "ASR_BACKEND=ane" settings.env 2>/dev/null; then
+  ./setup-ane.sh
+fi
 
 if (( AUTOSTART )); then
   ./install-autostart.sh
