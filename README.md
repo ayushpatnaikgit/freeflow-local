@@ -1,5 +1,7 @@
 # freeflow-local
 
+[Website](https://ayushpatnaikgit.github.io/freeflow-local/) · [Latest release](https://github.com/ayushpatnaikgit/freeflow-local/releases/latest)
+
 **Private, offline dictation for your Mac.** Hold a key, speak, and clean, punctuated text appears wherever you are
 typing. Speech recognition and cleanup both run on your Mac's own chips, so your audio, your words and your screen
 never leave the computer, and it works without an internet connection.
