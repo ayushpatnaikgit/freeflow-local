@@ -21,25 +21,22 @@ running locally on Apple Silicon.
 
 ## Requirements
 
-- An Apple Silicon Mac (M1 or later) with 16 GB of RAM or more.
+- An Apple Silicon Mac (M1 or later) on macOS 14 (Sonoma) or later, with 16 GB of RAM or more.
 - About 6 GB of free disk space for the models.
-- [Homebrew](https://brew.sh) or [uv](https://docs.astral.sh/uv/), and the Xcode Command Line Tools
-  (`xcode-select --install`) for the Neural Engine and screen-words helpers.
 
 ## Install
 
 1. Install [FreeFlow](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg) and move it to
    Applications.
-2. Install the backend:
+2. Install the backend by pasting this into Terminal:
 
    ```sh
-   git clone https://github.com/ayushpatnaikgit/freeflow-local.git
-   cd freeflow-local
-   ./install.sh
+   curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh
    ```
 
-   This downloads the models (about 6 GB the first time), starts the backend at every login, and points FreeFlow at
-   it.
+   This downloads the latest release and checks its checksum, installs [uv](https://docs.astral.sh/uv/) (the Python
+   package manager) if you don't have it, downloads the models (about 6 GB the first time), starts the backend at
+   every login, and points FreeFlow at it. Nothing needs compiling.
 3. Open FreeFlow and finish its setup:
    - Allow **Microphone** and **Accessibility**.
    - Allow **Screen Recording** if you want on-screen names and terms spelled correctly. It is optional, and the
@@ -47,7 +44,11 @@ running locally on Apple Silicon.
    - If FreeFlow asks for an API key, type any text, for example `local`.
    - Keep **context capture** on (the default). It is what starts loading the models as soon as you start recording.
 
-To update, run `git pull && ./install.sh` again.
+To update, run the same command again.
+
+**From source** (to change the code): `git clone https://github.com/ayushpatnaikgit/freeflow-local.git`, then run
+`./install.sh` in the folder. Building from source needs the Xcode Command Line Tools (`xcode-select --install`) for
+the two small Swift helpers; to update, `git pull && ./install.sh`.
 
 ## Speed
 

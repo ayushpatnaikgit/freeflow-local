@@ -1,6 +1,6 @@
 [project]
 name = "freeflow-local"
-version = "0.1.0"
+version = "0.2.0"
 description = "Private, local dictation backend for FreeFlow on Apple Silicon: Orukeet speech-to-text and Gemma 4 cleanup on MLX"
 readme = "README.md"
 authors = [{ name = "Ayush Patnaik" }]
