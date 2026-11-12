@@ -52,7 +52,8 @@ echo "Downloading models (about 6 GB the first time; later runs skip this)..."
 for model in "$ASR_MODEL" "$LLM_MODEL"; do
   # The exact version from pinned-models.txt when the model is listed there; only show output if it fails.
   rev=$(awk -v m="$model" '$1 == m {print $2}' pinned-models.txt)
-  if ! out=$(uv run --frozen hf download "$model" ${rev:+--revision "$rev"} --quiet 2>&1); then
+  pin=(); [[ -n "$rev" ]] && pin=(--revision "$rev")
+  if ! out=$(uv run --frozen hf download "$model" "${pin[@]}" --quiet 2>&1); then
     print -r -- "$out" >&2
     exit 1
   fi
