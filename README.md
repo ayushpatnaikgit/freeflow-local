@@ -7,31 +7,32 @@ the free and open-source dictation app. Your audio and text never leave your com
 - **Cleanup** (filler words, punctuation, names from your vocabulary): Google's Gemma 4 E4B
 - **Runs on** Apple's [MLX](https://github.com/ml-explore/mlx), on the Mac's GPU
 
-## Speed: slow first, then fast
+## Speed
 
 The models are only loaded while you are using them, so they don't hold memory when you aren't dictating.
+Loading starts the moment you start recording, so it happens while you speak.
 
-- **First dictation after a break is slower.** This is a cold start. Loading begins the moment you start
-  recording, so much of it happens while you speak, but you still wait a few seconds after you stop.
-- **Every dictation for the next 10 minutes takes about 1 second.** The models stay loaded, and each dictation
-  resets the 10-minute timer.
+- **Warm (you dictated in the last 10 minutes): about 1 second** from when you stop speaking.
+- **First dictation after a break: about 2 seconds,** with full cleanup: the cleanup model loads while you talk.
+- **If the cleanup model still isn't ready when your text is,** the backend waits at most 1 second
+  (`COLD_WAIT_SECONDS`), then pastes the transcript as it is (punctuated, with uh/um removed) instead of
+  making you wait. The next dictation gets full cleanup. This mostly happens on the first dictation after
+  restarting your Mac, when the cleanup instructions also have to be processed for the first time.
 - **After 10 minutes without dictating,** the models unload and memory use drops back to almost nothing.
-- **The very first dictation after installing or restarting your Mac is the slowest,** around 10 seconds, because
-  the backend also has to process FreeFlow's cleanup instructions for the first time. It keeps them in memory
-  afterwards.
 
-Measured on an M4 Mac with 24 GB of RAM, from when you stop speaking:
+Measured on an M4 Mac with 24 GB of RAM, 6 s of speech, Neural Engine speech-to-text:
 
-| Situation | Wait |
-|---|---|
-| **Warm** (dictated in the last 10 minutes) | **~1 s** (speech-to-text 0.1–0.4 s, cleanup ~0.7 s) |
-| After a 10-minute break (5 s of speech) | ~3–5 s |
-| First dictation after install or restart | ~8–10 s |
+| Situation | Gemma 4 E4B (default) | Gemma 4 E2B |
+|---|---|---|
+| Warm | ~0.9 s | ~0.5 s |
+| First dictation after a 10-minute break | ~1.8 s, full cleanup | ~0.6 s, full cleanup |
+| First dictation after a restart | ~1.1 s, no cleanup for that one | ~1.1 s, no cleanup for that one |
 
-Longer dictations hide more of the loading, so cold starts feel shorter when you speak for longer.
+E2B is faster and smaller (~3.5 GB vs ~5 GB while loaded) but formats less well: in our tests it did not lay
+out emails, turn spoken lists into lists, or punctuate long run-on dictations. Switch with
+`freeflowctl model e2b` (and back with `freeflowctl model e4b`).
 
-Prefer it fast every time? Install with `IDLE_UNLOAD_SECONDS=0` to keep the models loaded permanently, at the cost
-of about 6.3 GB of RAM.
+Prefer it fast every time? Install with `IDLE_UNLOAD_SECONDS=0` to keep the models loaded permanently.
 
 ## Requirements
 

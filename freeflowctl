@@ -8,6 +8,7 @@
 #   freeflowctl logs        follow the logs
 #   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
 #   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
+#   freeflowctl model e4b|e2b|<hf id>   cleanup model: Gemma 4 E4B (default, better) or E2B (faster, smaller)
 set -euo pipefail
 D="${0:A:h}"
 URL="http://127.0.0.1:8081/v1"
@@ -29,6 +30,17 @@ case "${1:-status}" in
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Restarted. Models load on the next dictation." ;;
   logs) tail -n 20 -f "$D/logs/server.log" "$D/logs/llm.log" ;;
+  model)
+    case "${2:-}" in
+      e4b) id=mlx-community/gemma-4-e4b-it-4bit ;;
+      e2b) id=mlx-community/gemma-4-e2b-it-4bit ;;
+      */*) id=$2 ;;
+      *) echo "usage: freeflowctl model e4b|e2b|<huggingface id>" >&2; exit 1 ;;
+    esac
+    (cd "$D" && out=$(uv run --frozen hf download "$id" --quiet 2>&1)) || { echo "Download failed for $id" >&2; exit 1; }
+    set_setting LLM_MODEL "$id"
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Cleanup model: $id. Backend restarted." ;;
   ane)
     case "${2:-}" in
       on)  "$D/setup-ane.sh" && set_setting ASR_BACKEND ane ;;
@@ -55,7 +67,8 @@ idle = h.get("idle_unload_after", 0)
 print("server: up")
 where = {"ane": "Neural Engine", "mlx": "GPU/MLX"}.get(h.get("asr_backend", "mlx"), "?")
 print("speech model:", f"loaded ({where})" if h.get("asr_loaded", h.get("ok")) else f"unloaded ({where} when loaded)")
-print("cleanup LLM: ", "loaded" if h.get("llm_running") else "unloaded")
+model = h.get("llm_model", "").split("/")[-1]
+print("cleanup LLM: ", f"loaded ({model})" if h.get("llm_running") else f"unloaded ({model})")
 secs = h.get("idle_seconds", "?")
 print(f"idle for {secs}s; unloads after", f"{idle:.0f}s" if idle > 0 else "never (always warm)")' || true
     [[ -f "$SETTINGS" ]] && /usr/bin/python3 -c 'import json,sys; print("FreeFlow API Base URL:", json.load(open(sys.argv[1])).get("api_base_url", "(default: Groq)"))' "$SETTINGS" ;;
@@ -76,5 +89,5 @@ with os.fdopen(fd, "w") as f:
 print("FreeFlow API Base URL ->", url)
 EOF
     open -a FreeFlow ;;
-  *) sed -n '2,10p' "$0"; exit 1 ;;
+  *) sed -n '2,11p' "$0"; exit 1 ;;
 esac

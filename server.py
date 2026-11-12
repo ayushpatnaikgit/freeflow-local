@@ -59,6 +59,9 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
+# While the LLM is still loading, wait this long at most, then answer without it (cleanup returns the
+# transcript as is; context is summarised from FreeFlow's metadata). Negative = always wait for the LLM.
+COLD_WAIT_SECONDS = float(os.environ.get("COLD_WAIT_SECONDS", "1.0"))
 STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm after transcription
 
 
@@ -204,6 +207,9 @@ def strip_fillers(text: str) -> str:
 _llm: subprocess.Popen | None = None
 _llm_port = 0
 _llm_lock = asyncio.Lock()
+_llm_warm = False  # weights loaded: short requests are answered at full speed
+_prefilled_prompt: str | None = None  # cleanup system prompt currently in the LLM's prompt cache
+_prefilling = False
 _cleanup_system_prompt: str | None = None  # memory only; contains the user's vocabulary
 
 
@@ -262,18 +268,39 @@ async def _ensure_llm() -> None:
 
 
 async def _prefill() -> None:
+    global _llm_warm, _prefilled_prompt, _prefilling
+    if _prefilling:
+        return
+    _prefilling = True
     t = time.perf_counter()
     system = _cleanup_system_prompt or "You clean up dictated text."
-    await asyncio.to_thread(_http, "POST", "/v1/chat/completions", {
+    status, _, _ = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", {
         "model": LLM_MODEL, "temperature": 0, "max_tokens": 1,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": "Instructions: Clean up RAW_TRANSCRIPTION."}]})
+    _llm_warm = status == 200 and _llm_alive()
+    _prefilled_prompt = system if _llm_warm else None
+    _prefilling = False
     log(f"llm weights + prompt cache warm in {time.perf_counter() - t:.1f}s"
-        f"{'' if _cleanup_system_prompt else ' (no cleanup prompt seen yet)'}")
+        f"{'' if _cleanup_system_prompt else ' (no cleanup prompt seen yet)'}"
+        f"{'' if _llm_warm else f' FAILED (HTTP {status})'}")
+
+
+async def _wait_until_ready(timeout: float, cleanup_prompt: str | None) -> bool:
+    """Loaded, and (for cleanup) with this exact system prompt already in the prompt cache."""
+    def ready() -> bool:
+        return _llm_warm and (cleanup_prompt is None or _prefilled_prompt == cleanup_prompt)
+    deadline = time.monotonic() + timeout
+    while not ready() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    if not ready() and cleanup_prompt is not None and _llm_warm:
+        asyncio.create_task(_prefill())  # loaded but caching other instructions: cache these for next time
+    return ready()
 
 
 def _stop_llm() -> None:
-    global _llm
+    global _llm, _llm_warm, _prefilled_prompt
+    _llm_warm, _prefilled_prompt = False, None
     if _llm is None:
         return
     if _llm.poll() is None:
@@ -382,6 +409,16 @@ async def chat_completions(request: Request):
             _cleanup_system_prompt = messages[0]["content"]
             m = _RAW_BLOCK.search(str(messages[-1].get("content", "")))
             raw = m.group(1).strip() if m else None
+        metadata = _context_metadata(messages)
+        cleanup_prompt = messages[0]["content"] if raw is not None else None
+        if (raw is not None or metadata is not None) and COLD_WAIT_SECONDS >= 0 \
+                and not await _wait_until_ready(COLD_WAIT_SECONDS, cleanup_prompt):
+            # Cold start: don't make the user wait for the LLM to load. It keeps loading for next time.
+            if raw is not None:
+                log("cold start: pasted the transcript without LLM cleanup")
+                return JSONResponse(_completion(raw))
+            log("cold start: answered the context request from metadata")
+            return JSONResponse(_completion(_summary_from_metadata(metadata)))
         await _ensure_llm()
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
@@ -390,6 +427,32 @@ async def chat_completions(request: Request):
 
 
 _RAW_BLOCK = re.compile(r"<<<RAW_TRANSCRIPTION\n(.*?)\nRAW_TRANSCRIPTION", re.S)
+
+
+def _context_metadata(messages: list) -> dict | None:
+    """FreeFlow's "what is the user doing" request -> its App/Window/... fields, else None."""
+    if not messages:
+        return None
+    content = messages[-1].get("content", "")
+    text = "\n".join(p.get("text", "") for p in content) if isinstance(content, list) else str(content)
+    if "current activity" not in text or "App:" not in text:
+        return None
+    return dict(re.findall(r"^(App|Window|Bundle ID|Selected text): *(.*)$", text, re.M))
+
+
+def _summary_from_metadata(meta: dict) -> str:
+    app = meta.get("App", "Unknown")
+    window = meta.get("Window", "Unknown")
+    where = f"in {app}" if app != "Unknown" else "in an unknown app"
+    if window not in ("Unknown", ""):
+        where += f', in the window "{window}"'
+    return f"The user is working {where}. Their writing intent is not known beyond this window."
+
+
+def _completion(content: str) -> dict:
+    return {"id": "chatcmpl-local", "object": "chat.completion", "created": int(time.time()), "model": LLM_MODEL,
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
 
 
 def _keep_spoken_words(data: bytes, raw: str) -> bytes:
