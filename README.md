@@ -121,6 +121,19 @@ and leaves the GPU free for the cleanup model. Text matched the MLX version on 9
 recordings, up to 2 minutes long); the differences were number spellings ("8" vs "eight"), apostrophes and one
 misheard word. If the Neural Engine helper fails, the backend falls back to MLX automatically.
 
+## Where this is going
+
+- **Use the Neural Engine for as much as possible.** Speech-to-text already runs there, which keeps the GPU free and
+  uses little power. Next are the screenshot reading and, as Apple's on-device tools for language models mature, the
+  cleanup model itself.
+- **Much faster cleanup as better small models arrive.** The cleanup model is a single setting
+  (`freeflowctl model`), and every candidate is measured on the same set of test dictations before it becomes the
+  default. Long dictations are the main target: cleaning a long dictation's sentences in parallel made it about twice
+  as fast in testing.
+- **Fine-tuning for dictation.** A small adapter (LoRA) trained on FreeFlow's exact requests (self-corrections,
+  custom vocabulary, app context and screen words) so that a smaller, faster model can match today's quality.
+  Training data is synthetic or public; nothing from anyone's dictations.
+
 ## Privacy
 
 - Audio, transcripts, screenshots and cleaned text are processed on your Mac and are not sent anywhere.

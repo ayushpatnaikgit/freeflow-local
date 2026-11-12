@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>freeflow-local · private dictation for your Mac</title>
+<meta name="description" content="Private, offline dictation for FreeFlow on Apple Silicon. Speech recognition and cleanup run on your Mac; nothing leaves the computer.">
+<meta property="og:title" content="freeflow-local">
+<meta property="og:description" content="Private, offline dictation for FreeFlow on Apple Silicon. Speech recognition and cleanup run on your Mac.">
+<style>
+  :root {
+    --bg: #fbfbfa; --surface: #ffffff; --text: #1d1d1f; --muted: #5f6368; --line: #e3e3e0;
+    --accent: #2f6f5e; --accent-soft: #e6f1ed; --code-bg: #f2f2ef; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121413; --surface: #1a1d1c; --text: #ececea; --muted: #a2a8a5; --line: #2c312f;
+      --accent: #7cc4ad; --accent-soft: #1f2d28; --code-bg: #222624; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+  header.top { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+  .brand { font-weight: 650; letter-spacing: -.01em; }
+  .top nav a { margin-left: 18px; color: var(--muted); text-decoration: none; font-size: 15px; }
+  .top nav a:hover { color: var(--text); }
+  .hero { padding: 56px 0 40px; }
+  .hero h1 { font-size: clamp(34px, 6vw, 54px); line-height: 1.08; letter-spacing: -.025em; margin: 0 0 18px; }
+  .hero p.lede { font-size: clamp(18px, 2.4vw, 21px); color: var(--muted); max-width: 640px; margin: 0 0 28px; }
+  .install {
+    display: flex; align-items: center; gap: 10px; background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 12px 12px 16px; max-width: 760px;
+  }
+  .install code { flex: 1; overflow-x: auto; white-space: nowrap; font: 14.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
+  .install button {
+    border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--bg);
+  }
+  .hero .small { color: var(--muted); font-size: 14.5px; margin-top: 12px; }
+  section { padding: 40px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; letter-spacing: -.015em; margin: 0 0 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .grid.two { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 640px) { .grid.two { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; box-shadow: var(--shadow); }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15.5px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin: 8px 0 18px; }
+  .step { flex: 1 1 160px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .step b { display: block; font-size: 15px; }
+  .step span { color: var(--muted); font-size: 14px; }
+  .step .chip { display: inline-block; margin-top: 8px; font-size: 12.5px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+  .arrow { align-self: center; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; max-width: 640px; font-size: 15.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 14px; }
+  td.num { font-variant-numeric: tabular-nums; }
+  ul.plain { padding-left: 20px; margin: 0; }
+  ul.plain li { margin: 6px 0; }
+  .note { color: var(--muted); font-size: 15px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font: 14px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  footer { padding: 32px 0 48px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
+  @media (max-width: 600px) {
+    .top nav a:not(.gh) { display: none; }
+    .arrow { display: none; }
+    .install { flex-direction: column; align-items: stretch; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">freeflow-local</div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#roadmap">Roadmap</a>
+      <a class="gh" href="https://github.com/ayushpatnaikgit/freeflow-local">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>Dictation that never leaves your Mac.</h1>
+    <p class="lede">Hold a key, speak, and clean, punctuated text appears wherever you're typing. Speech recognition and
+      cleanup both run on your Mac's own chips: no cloud, no account, and it works offline. It powers
+      <a href="https://github.com/zachlatta/freeflow">FreeFlow</a>, the free and open-source dictation app.</p>
+    <div class="install">
+      <code id="cmd">curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh</code>
+      <button type="button" id="copy">Copy</button>
+    </div>
+    <p class="small">Paste into Terminal. Needs an Apple Silicon Mac on macOS 14 or later, 16 GB of RAM and about 6 GB of
+      disk. Install <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg">FreeFlow</a> first.</p>
+  </div>
+
+  <section>
+    <h2>What you get</h2>
+    <div class="grid two">
+      <div class="card"><h3>Accurate speech-to-text</h3><p>Orukeet, a multilingual fine-tune of NVIDIA Parakeet, running on
+        the Apple Neural Engine in about 0.1–0.2 s per dictation.</p></div>
+      <div class="card"><h3>Reads like you typed it</h3><p>Google's Gemma 4 removes fillers and false starts, fixes
+        punctuation, formats emails and uses your custom vocabulary.</p></div>
+      <div class="card"><h3>Spells what's on screen</h3><p>Names and terms visible in the window you're dictating into are
+        spelled right, even when misheard: "Laura" becomes "LoRA".</p></div>
+      <div class="card"><h3>Light on memory</h3><p>Models load when you start speaking and unload after 10 idle minutes.
+        Open source under Apache 2.0.</p></div>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <div class="flow">
+      <div class="step"><b>You start recording</b><span>Models start loading and the screen is read while you speak.</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Speech to text</b><span>Orukeet transcribes your audio.</span><br><span class="chip">Neural Engine</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Cleanup</b><span>Gemma 4 E4B tidies the text, using your vocabulary and on-screen words.</span><br><span class="chip">GPU, via MLX</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Your text</b><span>FreeFlow pastes it where you're typing.</span></div>
+    </div>
+    <p class="note">The backend is a small local server that speaks the same API FreeFlow uses for cloud services, so
+      FreeFlow needs no changes. It listens only on your own machine (127.0.0.1).</p>
+  </section>
+
+  <section>
+    <h2>Speed</h2>
+    <table>
+      <thead><tr><th>Time from when you stop speaking</th><th>Gemma 4 E4B (default)</th><th>Gemma 4 E2B</th></tr></thead>
+      <tbody>
+        <tr><td>Warm (dictated in the last 10 minutes)</td><td class="num">~0.9 s</td><td class="num">~0.5 s</td></tr>
+        <tr><td>First dictation after a 10-minute break</td><td class="num">~1.8 s</td><td class="num">~0.6 s</td></tr>
+      </tbody>
+    </table>
+    <p class="note">M4 Mac, 24 GB, 6 s of speech. The first dictation after a restart takes a few seconds more; long
+      dictations take longer because the whole text is rewritten. Switch models with
+      <code>freeflowctl model e2b</code>: faster, but it follows instructions less well.</p>
+  </section>
+
+  <section>
+    <h2>Screen words</h2>
+    <p>Speech recognition turns rare words into common ones. With FreeFlow's Screen Recording permission, the backend
+      reads the active window with Apple's on-device text recognition, picks out unusual words (names, acronyms,
+      technical terms) and gives the cleanup model only the ones that sound like something you said.</p>
+    <ul class="plain">
+      <li>In tests, misheard on-screen names and terms were fixed 13 times out of 16, against 7 without it, with no change on 77 other dictations.</li>
+      <li>Best for names and terms misheard as other words. For code-like tokens and words you use often, add them to FreeFlow's custom vocabulary.</li>
+      <li>Optional: turn it off with <code>freeflowctl screen-words off</code> or by not granting Screen Recording.</li>
+    </ul>
+  </section>
+
+  <section id="privacy">
+    <h2>Privacy</h2>
+    <ul class="plain">
+      <li>Audio, transcripts, screenshots and cleaned text are processed on your Mac and not sent anywhere.</li>
+      <li>Screenshots and the words read from them stay in memory, are never written to disk, and are discarded after each dictation.</li>
+      <li>Logs contain timings and counts, never what you said or what was on screen.</li>
+      <li>Models are downloaded once from Hugging Face; after that it runs offline.</li>
+    </ul>
+  </section>
+
+  <section id="roadmap">
+    <h2>Where this is going</h2>
+    <div class="grid">
+      <div class="card"><h3>Neural Engine first</h3><p>Run as much as possible on the Neural Engine: speech already does;
+        next the screenshot reading and, as Apple's on-device tools mature, the cleanup model itself.</p></div>
+      <div class="card"><h3>Much faster with newer models</h3><p>The cleanup model is one setting. Every new candidate is
+        measured on the same test dictations before it becomes the default, with long dictations the main target.</p></div>
+      <div class="card"><h3>Fine-tuned for dictation</h3><p>A small adapter trained on FreeFlow's exact requests, so a
+        smaller, faster model can match today's quality. Trained on synthetic and public data only.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Commands</h2>
+<pre>~/Library/Application\ Support/FreeFlowLocal/freeflowctl status
+freeflowctl model e4b|e2b|&lt;id&gt;     # change the cleanup model
+freeflowctl ane on|off             # speech-to-text on the Neural Engine or the GPU
+freeflowctl screen-words on|off    # spell on-screen words
+freeflowctl uninstall              # remove it from login</pre>
+    <p class="note">Full documentation, troubleshooting and source: <a href="https://github.com/ayushpatnaikgit/freeflow-local#readme">README on GitHub</a>.</p>
+  </section>
+
+  <footer>
+    Apache License 2.0. Model weights keep their own licences: Orukeet is CC BY-SA 4.0 (Oruk AI), Gemma 4 is Apache 2.0
+    (Google). Not affiliated with FreeFlow, Oruk AI, NVIDIA, Google or Apple.
+  </footer>
+</div>
+<script>
+  document.getElementById("copy").addEventListener("click", function () {
+    var button = this, text = document.getElementById("cmd").textContent;
+    function done(ok) { button.textContent = ok ? "Copied" : "Select and copy"; setTimeout(function () { button.textContent = "Copy"; }, 1800); }
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); }); }
+    else { done(false); }
+  });
+</script>
+</body>
+</html>

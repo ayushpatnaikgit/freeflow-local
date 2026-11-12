@@ -14,7 +14,7 @@ jobs:
   release:
     runs-on: macos-15  # Apple Silicon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build helpers and package
         run: scripts/make-release.sh
       - name: Create release

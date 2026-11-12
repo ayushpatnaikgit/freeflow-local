@@ -1,0 +1,28 @@
+# Checks on every push to main and every pull request: scripts parse, the Swift helpers build (and the OCR helper
+# reads its own synthetic test image), and the Python unit tests pass. Uses synthetic data only.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-15  # Apple Silicon, like the users' Macs
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shell scripts parse
+        run: |
+          sh -n get.sh
+          for f in install.sh install-autostart.sh setup-ane.sh start.sh freeflowctl scripts/*.sh; do zsh -n "$f"; done
+      - name: Build Swift helpers (OCR self-test included)
+        run: scripts/build-helpers.sh
+      - name: Unit tests
+        run: |
+          command -v uv >/dev/null || brew install uv
+          uv sync --frozen
+          uv run --frozen python -m unittest discover -v tests
