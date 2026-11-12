@@ -57,15 +57,20 @@ for model in "$ASR_MODEL" "$LLM_MODEL"; do
   fi
 done
 
-# Screen words: read FreeFlow's context screenshot on device. Needs the Swift compiler; without it the feature is off.
-if command -v swiftc >/dev/null; then
+# Swift helpers: a release (get.sh) ships them prebuilt in bin/; a git checkout builds them, which needs the
+# Xcode Command Line Tools. Without either, screen words and Neural Engine speech-to-text are unavailable.
+rm -f "$DEST/bin/screen-ocr"
+if [[ -x "$SRC/bin/screen-ocr" && -x "$SRC/bin/orukeet-ane" && ! "$SRC/ocr/screen_ocr.swift" -nt "$SRC/bin/screen-ocr" ]]; then
+  cp "$SRC/bin/screen-ocr" "$SRC/bin/orukeet-ane" "$DEST/bin/"
+elif command -v swiftc >/dev/null; then
   echo "Building the screen-words helper..."
-  if ! { swiftc -O -o "$DEST/bin/screen-ocr" "$DEST/ocr/screen_ocr.swift" && "$DEST/bin/screen-ocr" --selftest >/dev/null; }; then
-    rm -f "$DEST/bin/screen-ocr"
-    echo "Warning: the screen-words helper did not build or pass its self-test; screen words are off." >&2
-  fi
+  swiftc -O -o "$DEST/bin/screen-ocr" "$DEST/ocr/screen_ocr.swift" || rm -f "$DEST/bin/screen-ocr"
 else
   echo "Note: Xcode Command Line Tools not found (xcode-select --install), so screen words are off."
+fi
+if [[ -x "$DEST/bin/screen-ocr" ]] && ! "$DEST/bin/screen-ocr" --selftest >/dev/null; then
+  rm -f "$DEST/bin/screen-ocr"
+  echo "Warning: the screen-words helper failed its self-test; screen words are off." >&2
 fi
 
 # Neural Engine speech-to-text was switched on earlier (freeflowctl ane on): rebuild its helper for this version.
