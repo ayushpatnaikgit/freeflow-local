@@ -40,6 +40,7 @@ import numpy as np
 from fastapi import FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+import compact_prompt
 import fast_tdt
 import screen_words
 
@@ -88,8 +89,24 @@ def model_source(repo: str) -> str:
         return repo
 
 
+def adapter_path(setting: str) -> str | None:
+    """LLM_ADAPTER: a LoRA adapter folder (absolute, or relative to the install folder); None if unset or missing."""
+    if not setting:
+        return None
+    path = Path(setting).expanduser()
+    path = path if path.is_absolute() else HERE / path
+    if not (path / "adapters.safetensors").exists():
+        print(f"note: LLM_ADAPTER {setting} has no adapters.safetensors; serving the base model", flush=True)
+        return None
+    return str(path)
+
+
 ASR_SOURCE = model_source(ASR_MODEL)
 LLM_SOURCE = model_source(LLM_MODEL)
+LLM_ADAPTER = adapter_path(os.environ.get("LLM_ADAPTER", ""))
+# mlx_lm.server attaches --adapter-path only to "default_model"; naming the model loads a second copy WITHOUT it.
+LLM_REQUEST_MODEL = "default_model" if LLM_ADAPTER else LLM_SOURCE
+LLM_PROMPT = os.environ.get("LLM_PROMPT", "freeflow")  # "compact": swap FreeFlow's default prompt for the trained one
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
@@ -399,12 +416,13 @@ async def _ensure_llm() -> None:
         t = time.perf_counter()
         _llm_port = LLM_PORT or _free_port()
         logf = open(HERE / "logs" / "llm.log", "ab")
-        _llm = subprocess.Popen(
-            [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_SOURCE,
-             "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
-             "--chat-template-args", '{"enable_thinking":false}',
-             "--allowed-origins", "none"],  # no web page may call the model server (default would be "*")
-            stdout=logf, stderr=subprocess.STDOUT, cwd=HERE)
+        cmd = [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_SOURCE,
+               "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
+               "--chat-template-args", '{"enable_thinking":false}',
+               "--allowed-origins", "none"]  # no web page may call the model server (default would be "*")
+        if LLM_ADAPTER:
+            cmd += ["--adapter-path", LLM_ADAPTER]
+        _llm = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, cwd=HERE)
         while True:
             if not _llm_alive():
                 log(f"llm failed to start on port {_llm_port}; see logs/llm.log")
@@ -425,7 +443,7 @@ async def _prefill() -> None:
     t = time.perf_counter()
     system = _cleanup_system_prompt or "You clean up dictated text."
     status, _, _ = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", {
-        "model": LLM_SOURCE, "temperature": 0, "max_tokens": 1,
+        "model": LLM_REQUEST_MODEL, "temperature": 0, "max_tokens": 1,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": "Instructions: Clean up RAW_TRANSCRIPTION."}]})
     log(f"llm weights + prompt cache warm in {time.perf_counter() - t:.1f}s"
@@ -543,7 +561,7 @@ async def chat_completions(request: Request):
     async with _Activity():
         _wake()  # recording just started (context request) or cleanup is due
         payload = await request.json()
-        payload["model"] = LLM_SOURCE
+        payload["model"] = LLM_REQUEST_MODEL
         payload["stream"] = False
         for hosted_only in ("reasoning_effort", "include_reasoning"):  # Groq/OpenAI options
             payload.pop(hosted_only, None)
@@ -557,6 +575,7 @@ async def chat_completions(request: Request):
         raw = None
         if (len(messages) >= 2 and messages[0].get("role") == "system"
                 and "RAW_TRANSCRIPTION" in str(messages[-1].get("content", ""))):
+            _use_prompt_style(messages)
             _cleanup_system_prompt = messages[0]["content"]
             m = _RAW_BLOCK.search(str(messages[-1].get("content", "")))
             raw = m.group(1).strip() if m else None
@@ -570,6 +589,20 @@ async def chat_completions(request: Request):
 
 
 _RAW_BLOCK = re.compile(r"<<<RAW_TRANSCRIPTION\n(.*?)\nRAW_TRANSCRIPTION", re.S)
+_prompt_note_logged = False
+
+
+def _use_prompt_style(messages: list) -> None:
+    """With LLM_PROMPT=compact, give the fine-tuned model the prompt it was trained on (vocabulary etc. kept)."""
+    global _prompt_note_logged
+    if LLM_PROMPT != "compact" or not isinstance(messages[0].get("content"), str):
+        return
+    compact = compact_prompt.compact_system_prompt(messages[0]["content"])
+    if compact is not None:
+        messages[0]["content"] = compact
+    if not _prompt_note_logged:  # once per run; says which path, never the prompt itself
+        log("cleanup prompt: compact" if compact is not None else "cleanup prompt: custom, passed through unchanged")
+        _prompt_note_logged = True
 
 
 def _keep_spoken_words(data: bytes, raw: str) -> bytes:

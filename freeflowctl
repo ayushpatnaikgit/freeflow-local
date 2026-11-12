@@ -9,6 +9,7 @@
 #   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
 #   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
 #   freeflowctl model e4b|e2b|<hf id>   cleanup model: Gemma 4 E4B (default, better) or E2B (faster, smaller)
+#   freeflowctl model s1 [adapter dir]  experimental: S1-mini + a fine-tuned adapter (default dir: adapters/s1-mini)
 #   freeflowctl screen-words on|off      spell on-screen names and terms right, using FreeFlow's context screenshot
 set -euo pipefail
 D="${0:A:h}"
@@ -32,18 +33,25 @@ case "${1:-status}" in
     echo "Restarted. Models load on the next dictation." ;;
   logs) tail -n 20 -f "$D/logs/server.log" "$D/logs/llm.log" ;;
   model)
+    adapter=""
     case "${2:-}" in
       e4b) id=mlx-community/gemma-4-e4b-it-4bit ;;
       e2b) id=mlx-community/gemma-4-e2b-it-4bit ;;
+      s1)  # experimental: S1-mini with a locally fine-tuned LoRA adapter (not shipped in releases)
+        id=mlx-community/S1-mini-MLX-bf16; adapter="${3:-adapters/s1-mini}"
+        [[ -f "$D/$adapter/adapters.safetensors" || -f "$adapter/adapters.safetensors" ]] \
+          || { echo "No adapter at $adapter (needs adapters.safetensors and adapter_config.json)" >&2; exit 1; } ;;
       */*) id=$2 ;;
-      *) echo "usage: freeflowctl model e4b|e2b|<huggingface id>" >&2; exit 1 ;;
+      *) echo "usage: freeflowctl model e4b|e2b|s1 [adapter dir]|<huggingface id>" >&2; exit 1 ;;
     esac
     rev=$(awk -v m="$id" '$1 == m {print $2}' "$D/pinned-models.txt" 2>/dev/null)
     pin=(); [[ -n "$rev" ]] && pin=(--revision "$rev")
     (cd "$D" && out=$(uv run --frozen hf download "$id" "${pin[@]}" --quiet 2>&1)) || { echo "Download failed for $id" >&2; exit 1; }
     set_setting LLM_MODEL "$id"
+    set_setting LLM_ADAPTER "$adapter"
+    set_setting LLM_PROMPT "$([[ -n "$adapter" ]] && echo compact || echo freeflow)"
     launchctl kickstart -k "gui/$UID/$LABEL"
-    echo "Cleanup model: $id. Backend restarted." ;;
+    echo "Cleanup model: $id${adapter:+ + adapter $adapter}. Backend restarted." ;;
   ane)
     case "${2:-}" in
       on)  "$D/setup-ane.sh" && set_setting ASR_BACKEND ane ;;
@@ -102,5 +110,5 @@ with os.fdopen(fd, "w") as f:
 print("FreeFlow API Base URL ->", url)
 EOF
     open -a FreeFlow ;;
-  *) sed -n '2,12p' "$0"; exit 1 ;;
+  *) sed -n '2,13p' "$0"; exit 1 ;;
 esac
