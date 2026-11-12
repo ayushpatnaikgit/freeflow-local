@@ -87,3 +87,37 @@ class ScreenWordsServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecurityTest(unittest.TestCase):
+    def test_requests_from_web_pages_are_refused(self):
+        page = {"origin": "https://example.com", "sec-fetch-site": "cross-site"}
+        self.assertTrue(server._from_web_page(page))
+        self.assertTrue(server._from_web_page({"origin": "http://127.0.0.1:3000"}))
+        self.assertTrue(server._from_web_page({"sec-fetch-site": "same-site"}))
+        self.assertFalse(server._from_web_page({}))  # FreeFlow, curl, freeflowctl
+        self.assertFalse(server._from_web_page({"sec-fetch-site": "none"}))  # typing the URL in a browser
+
+    def test_middleware_answers_403_to_a_web_page(self):
+        async def call(headers):
+            sent = []
+            scope = {"type": "http", "method": "GET", "path": "/health", "raw_path": b"/health", "query_string": b"",
+                     "headers": [(k.encode(), v.encode()) for k, v in headers.items()], "http_version": "1.1",
+                     "scheme": "http", "server": ("127.0.0.1", 8081), "client": ("127.0.0.1", 5000), "root_path": ""}
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+            await server.app(scope, receive, send)
+            return next(m["status"] for m in sent if m["type"] == "http.response.start")
+        self.assertEqual(asyncio.run(call({"origin": "https://example.com"})), 403)
+        self.assertEqual(asyncio.run(call({})), 200)
+
+    def test_pins_file_parsing(self):
+        pins = server.read_pins("# comment\nowner/model abc123  # trailing\n\nbad line here x\nother/m def\n")
+        self.assertEqual(pins, {"owner/model": "abc123", "other/m": "def"})
+        shipped = server.read_pins((server.HERE / "pinned-models.txt").read_text())
+        self.assertIn("mlx-community/gemma-4-e4b-it-4bit", shipped)
+        self.assertTrue(all(len(v) == 40 for v in shipped.values()))

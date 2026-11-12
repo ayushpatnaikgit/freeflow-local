@@ -1,0 +1,5 @@
+# Exact model versions (Hugging Face commit) that freeflow-local downloads and loads. Changing a line here is how a
+# model gets updated; nothing changes silently upstream. Models not listed (freeflowctl model <id>) are not pinned.
+itsreidar/orukeet-mlx 17894066e1d148997bfc93a4d41c605ca1b0475d
+mlx-community/gemma-4-e4b-it-4bit 475b9088d29754a3379866cf5aeb6b41acd313c2
+mlx-community/gemma-4-e2b-it-4bit 238767527555cb75a05732a84dff5d6ba0dd6809

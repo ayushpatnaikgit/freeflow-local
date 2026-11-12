@@ -38,7 +38,8 @@ case "${1:-status}" in
       */*) id=$2 ;;
       *) echo "usage: freeflowctl model e4b|e2b|<huggingface id>" >&2; exit 1 ;;
     esac
-    (cd "$D" && out=$(uv run --frozen hf download "$id" --quiet 2>&1)) || { echo "Download failed for $id" >&2; exit 1; }
+    rev=$(awk -v m="$id" '$1 == m {print $2}' "$D/pinned-models.txt" 2>/dev/null)
+    (cd "$D" && out=$(uv run --frozen hf download "$id" ${rev:+--revision "$rev"} --quiet 2>&1)) || { echo "Download failed for $id" >&2; exit 1; }
     set_setting LLM_MODEL "$id"
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Cleanup model: $id. Backend restarted." ;;

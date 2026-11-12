@@ -62,6 +62,34 @@ ANE_CACHE = HERE / "coreml" / "compiled"
 ANE_HELPER = HERE / "bin" / "orukeet-ane"
 ASR_MODEL = os.environ.get("ASR_MODEL", "itsreidar/orukeet-mlx")
 LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
+
+
+def read_pins(text: str) -> dict[str, str]:
+    """pinned-models.txt: "<repo> <commit>" per line; # comments."""
+    pins = {}
+    for line in text.splitlines():
+        parts = line.split("#", 1)[0].split()
+        if len(parts) == 2:
+            pins[parts[0]] = parts[1]
+    return pins
+
+
+def model_source(repo: str) -> str:
+    """Local folder of the pinned version of a model if it is pinned and downloaded, else the repo id itself."""
+    pins_file = HERE / "pinned-models.txt"
+    revision = read_pins(pins_file.read_text()).get(repo) if pins_file.exists() else None
+    if not revision:
+        return repo
+    try:
+        from huggingface_hub import snapshot_download
+        return snapshot_download(repo, revision=revision, local_files_only=True)
+    except Exception:  # noqa: BLE001 - not downloaded at that version: fall back to the cached latest, and say so
+        print(f"note: pinned version of {repo} is not downloaded; run install.sh to fetch it", flush=True)
+        return repo
+
+
+ASR_SOURCE = model_source(ASR_MODEL)
+LLM_SOURCE = model_source(LLM_MODEL)
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
@@ -146,7 +174,7 @@ def _load_mlx_asr() -> None:
     from parakeet_mlx import from_pretrained
 
     t = time.perf_counter()
-    _asr = from_pretrained(ASR_MODEL)
+    _asr = from_pretrained(ASR_SOURCE)
     with tempfile.NamedTemporaryFile(suffix=".wav") as f:  # compile Metal kernels once
         with wave.open(f.name, "wb") as w:
             w.setnchannels(1)
@@ -372,16 +400,17 @@ async def _ensure_llm() -> None:
         _llm_port = LLM_PORT or _free_port()
         logf = open(HERE / "logs" / "llm.log", "ab")
         _llm = subprocess.Popen(
-            [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_MODEL,
+            [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_SOURCE,
              "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
-             "--chat-template-args", '{"enable_thinking":false}'],
+             "--chat-template-args", '{"enable_thinking":false}',
+             "--allowed-origins", "none"],  # no web page may call the model server (default would be "*")
             stdout=logf, stderr=subprocess.STDOUT, cwd=HERE)
         while True:
             if not _llm_alive():
                 log(f"llm failed to start on port {_llm_port}; see logs/llm.log")
                 raise RuntimeError("mlx_lm.server exited during startup; see logs/llm.log")
             status, body, _ = await asyncio.to_thread(_http, "GET", "/v1/models", None, 2)
-            if status == 200 and LLM_MODEL.encode() in body:
+            if status == 200 and json.dumps(LLM_SOURCE)[1:-1].encode() in body:
                 break
             if time.perf_counter() - t > 60:
                 _stop_llm()
@@ -396,7 +425,7 @@ async def _prefill() -> None:
     t = time.perf_counter()
     system = _cleanup_system_prompt or "You clean up dictated text."
     status, _, _ = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", {
-        "model": LLM_MODEL, "temperature": 0, "max_tokens": 1,
+        "model": LLM_SOURCE, "temperature": 0, "max_tokens": 1,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": "Instructions: Clean up RAW_TRANSCRIPTION."}]})
     log(f"llm weights + prompt cache warm in {time.perf_counter() - t:.1f}s"
@@ -476,6 +505,19 @@ async def lifespan(_app):
 app = FastAPI(lifespan=lifespan)
 
 
+def _from_web_page(headers) -> bool:
+    """Browsers label requests made by web pages with Origin (and Sec-Fetch-Site); FreeFlow, curl and the backend's
+    own calls don't. Without this check, any website you visit could make the backend transcribe or run the model."""
+    return bool(headers.get("origin")) or headers.get("sec-fetch-site", "none") != "none"
+
+
+@app.middleware("http")
+async def refuse_web_pages(request: Request, call_next):
+    if _from_web_page(request.headers):
+        return JSONResponse({"error": {"message": "Requests from web pages are not accepted."}}, status_code=403)
+    return await call_next(request)
+
+
 @app.get("/v1/models")
 async def models():
     return {"object": "list", "data": [
@@ -501,7 +543,7 @@ async def chat_completions(request: Request):
     async with _Activity():
         _wake()  # recording just started (context request) or cleanup is due
         payload = await request.json()
-        payload["model"] = LLM_MODEL
+        payload["model"] = LLM_SOURCE
         payload["stream"] = False
         for hosted_only in ("reasoning_effort", "include_reasoning"):  # Groq/OpenAI options
             payload.pop(hosted_only, None)

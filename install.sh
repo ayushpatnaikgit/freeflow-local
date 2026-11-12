@@ -39,7 +39,7 @@ fi
 echo "Installing to: $DEST"
 mkdir -p "$DEST/logs" "$DEST/ane" "$DEST/ocr" "$DEST/bin"
 rm -f "$DEST/parakeet_server.py"  # renamed to server.py in 0.1.0
-for f in server.py fast_tdt.py screen_words.py freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
+for f in server.py fast_tdt.py screen_words.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
          ane/orukeet_ane.swift ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
@@ -50,8 +50,9 @@ echo "Setting up Python environment..."
 uv sync --frozen --quiet --compile-bytecode
 echo "Downloading models (about 6 GB the first time; later runs skip this)..."
 for model in "$ASR_MODEL" "$LLM_MODEL"; do
-  # Only show the downloader's output if it fails (it otherwise prints tips unrelated to this install).
-  if ! out=$(uv run --frozen hf download "$model" --quiet 2>&1); then
+  # The exact version from pinned-models.txt when the model is listed there; only show output if it fails.
+  rev=$(awk -v m="$model" '$1 == m {print $2}' pinned-models.txt)
+  if ! out=$(uv run --frozen hf download "$model" ${rev:+--revision "$rev"} --quiet 2>&1); then
     print -r -- "$out" >&2
     exit 1
   fi
