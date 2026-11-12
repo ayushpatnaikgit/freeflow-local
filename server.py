@@ -5,6 +5,11 @@ One OpenAI-compatible endpoint (FreeFlow's API Base URL):
                             or via the orukeet-ane Core ML helper on the Neural Engine (ASR_BACKEND=ane)
   /v1/chat/completions      forwarded to an mlx_lm.server child process, model pinned
 
+Screen words: when FreeFlow's context request carries a screenshot (FreeFlow has Screen Recording permission), the
+screen-ocr helper reads it on device while the user speaks, and the unusual words on screen (LoRA, MLX, names) are
+added to that dictation's cleanup request, so a term heard as "Laura" can be written "LoRA". Screenshot, text and
+words stay in memory, are never logged, and are dropped after one dictation. SCREEN_WORDS=0 turns this off.
+
 Models load on demand and unload after IDLE_UNLOAD_SECONDS without requests. FreeFlow sends
 its context request the moment recording starts, so that request wakes everything up while
 the user is still speaking. After the LLM starts, the last-seen cleanup system prompt (kept
@@ -36,6 +41,7 @@ from fastapi import FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 import fast_tdt
+import screen_words
 
 HERE = Path(__file__).resolve().parent
 
@@ -60,6 +66,10 @@ LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each tim
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
 STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm after transcription
+SCREEN_WORDS = os.environ.get("SCREEN_WORDS", "1") != "0"  # use words read from FreeFlow's context screenshot
+OCR_HELPER = HERE / "bin" / "screen-ocr"
+SCREEN_WORDS_MAX_AGE = 300.0  # seconds from recording start (context request) to cleanup; older words are ignored
+SCREEN_WORDS_WAIT = 0.5  # at cleanup, wait at most this long for OCR still running (it normally finished during speech)
 
 
 def log(msg: str) -> None:
@@ -199,6 +209,125 @@ def strip_fillers(text: str) -> str:
     return out if re.search(r"\w", out) else ""
 
 
+# ---------------------------------------------------------------- screen words (OCR helper process)
+
+_ocr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
+
+
+class _OcrHelper:
+    """The screen-ocr Swift process: one base64 image per stdin line in, one JSON line of text lines out."""
+
+    def __init__(self) -> None:
+        self.proc = subprocess.Popen([str(OCR_HELPER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, cwd=HERE)
+        ready = json.loads(self.proc.stdout.readline() or '{"error": "helper exited"}')
+        if not ready.get("ready"):
+            self.close()
+            raise RuntimeError(ready.get("error", "screen-ocr did not start"))
+
+    def read(self, data_url: str) -> list[str]:
+        self.proc.stdin.write(data_url.replace("\n", "") + "\n")
+        self.proc.stdin.flush()
+        line = self.proc.stdout.readline()
+        if not line:
+            raise RuntimeError("screen-ocr exited")
+        reply = json.loads(line)
+        if "error" in reply:
+            raise ValueError(reply["error"])  # this image only, e.g. undecodable
+        return reply["lines"]
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
+_ocr: _OcrHelper | None = None
+_ocr_failed = False  # after a failure, screen words stay off until restart
+_screen_task: asyncio.Future | None = None  # words for the dictation whose recording just started
+_screen_task_at = 0.0
+
+
+def _read_screen(data_url: str) -> list[str]:
+    """Runs on the OCR thread. Returns the unusual words; logs only counts and timing."""
+    global _ocr, _ocr_failed
+    t = time.perf_counter()
+    try:
+        if _ocr is None:
+            _ocr = _OcrHelper()
+        words = screen_words.screen_words(_ocr.read(data_url))
+    except ValueError:
+        log("screen words: could not read this screenshot")
+        return []
+    except Exception as e:  # noqa: BLE001 - any OCR failure only loses the screen words
+        log(f"screen words unavailable ({type(e).__name__}); off until restart")
+        _ocr_failed = True
+        _close_ocr()
+        return []
+    log(f"screen words: {len(words)} in {(time.perf_counter() - t) * 1000:.0f}ms")
+    return words
+
+
+def _close_ocr() -> None:
+    global _ocr
+    if _ocr is not None:
+        _ocr.close()
+        _ocr = None
+
+
+def _screenshot_url(messages: list) -> str | None:
+    """The data: URL of the screenshot in FreeFlow's context request, if any."""
+    content = messages[-1].get("content") if messages else None
+    if not isinstance(content, list):
+        return None
+    for part in content:
+        image = part.get("image_url") if isinstance(part, dict) and part.get("type") == "image_url" else None
+        url = image.get("url") if isinstance(image, dict) else image
+        if isinstance(url, str) and url.startswith("data:image/"):
+            return url
+    return None
+
+
+def _start_screen_words(messages: list) -> None:
+    global _screen_task, _screen_task_at
+    if not SCREEN_WORDS or _ocr_failed or not OCR_HELPER.exists():
+        return
+    url = _screenshot_url(messages)
+    if url is None:
+        return
+    _screen_task = asyncio.get_running_loop().run_in_executor(_ocr_pool, _read_screen, url)
+    _screen_task_at = time.monotonic()
+
+
+def _take_screen_task() -> asyncio.Future | None:
+    """This dictation's screen-words task, if recent; each one is used for one cleanup only."""
+    global _screen_task
+    task, _screen_task = _screen_task, None
+    if task is None or time.monotonic() - _screen_task_at > SCREEN_WORDS_MAX_AGE:
+        return None
+    return task
+
+
+async def _with_screen_words(messages: list, task: asyncio.Future | None, transcript: str) -> None:
+    """Add the screen words that sound like part of the transcript to the cleanup request's user message (not the
+    system prompt, which stays cached). Most dictations match none, and then the request is unchanged."""
+    if task is None:
+        return
+    try:
+        words = await asyncio.wait_for(asyncio.shield(task), SCREEN_WORDS_WAIT)
+    except asyncio.TimeoutError:
+        log("screen words not ready in time; cleaned up without them")
+        return
+    section = screen_words.prompt_section(screen_words.relevant(words, transcript))
+    content = messages[-1].get("content")
+    marker = "RAW_TRANSCRIPTION:\n<<<RAW_TRANSCRIPTION"
+    if section and isinstance(content, str) and content.count(marker) == 1:
+        messages[-1]["content"] = content.replace(marker, section + "\n" + marker)
+
+
 # ---------------------------------------------------------------- LLM (child process)
 
 _llm: subprocess.Popen | None = None
@@ -326,6 +455,7 @@ async def _idle_watch() -> None:
             async with _llm_lock:
                 _stop_llm()
             await asyncio.get_running_loop().run_in_executor(_mlx, _unload_asr)
+            await asyncio.get_running_loop().run_in_executor(_ocr_pool, _close_ocr)
 
 
 @asynccontextmanager
@@ -338,6 +468,7 @@ async def lifespan(_app):
     yield
     watcher.cancel()
     _stop_llm()
+    _close_ocr()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -356,6 +487,7 @@ async def health():
     return {"ok": True, "asr_loaded": _asr is not None or _ane is not None,
             "asr_backend": "ane" if _ane is not None else ("mlx" if _asr is not None else ASR_BACKEND),
             "llm_running": _llm_alive(),
+            "screen_words": SCREEN_WORDS and not _ocr_failed and OCR_HELPER.exists(),
             "idle_seconds": round(time.monotonic() - _last_activity),
             "idle_unload_after": IDLE_UNLOAD_SECONDS, "asr_model": ASR_MODEL, "llm_model": LLM_MODEL}
 
@@ -372,6 +504,7 @@ async def chat_completions(request: Request):
         for hosted_only in ("reasoning_effort", "include_reasoning"):  # Groq/OpenAI options
             payload.pop(hosted_only, None)
         messages = payload.get("messages", [])
+        _start_screen_words(messages)  # before the image is dropped below; OCR runs while the user speaks
         for message in messages:
             # mlx_lm can't read images for this model and reports that as a 404, which FreeFlow
             # treats as fatal (no text-only retry). Keep only text so context uses metadata.
@@ -383,7 +516,9 @@ async def chat_completions(request: Request):
             _cleanup_system_prompt = messages[0]["content"]
             m = _RAW_BLOCK.search(str(messages[-1].get("content", "")))
             raw = m.group(1).strip() if m else None
+        screen_task = _take_screen_task() if raw is not None else None
         await _ensure_llm()
+        await _with_screen_words(messages, screen_task, raw or "")
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
             data = _keep_spoken_words(data, raw)

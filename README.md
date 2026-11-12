@@ -52,7 +52,8 @@ Prefer it fast every time? Install with `IDLE_UNLOAD_SECONDS=0` to keep the mode
 
    This downloads the models, starts the backend at every login, and points FreeFlow at it.
 3. Open FreeFlow and finish its setup:
-   - Allow **Microphone** and **Accessibility**. Screen Recording is optional; the local model does not use screenshots.
+   - Allow **Microphone** and **Accessibility**. **Screen Recording** is optional: with it, names and technical terms
+     visible on screen are spelled correctly (see *Screen words* below). Screenshots never leave your Mac.
    - If it asks for an API key, type any text, for example `local`.
    - Keep **context capture** on (the default). It is what starts loading the models as soon as you start recording.
 
@@ -68,6 +69,7 @@ cd ~/Library/Application\ Support/FreeFlowLocal
 ./freeflowctl restart
 ./freeflowctl logs
 ./freeflowctl configure   # point FreeFlow at the backend again
+./freeflowctl screen-words on|off   # use words read from FreeFlow's screenshot (on by default)
 ./freeflowctl uninstall   # stop it and remove it from login
 ```
 
@@ -87,6 +89,31 @@ Measured on an M4: speech-to-text takes about 60–80 ms instead of 150–250 ms
 and leaves the GPU free for the cleanup model. Text matched the MLX version on 99% of words (924 words, 24
 recordings, up to 2 minutes long); the differences were number spellings ("8" vs "eight"), apostrophes and one
 misheard word. If the Neural Engine helper fails, the backend falls back to MLX automatically.
+
+## Screen words: spell what's on screen
+
+Speech recognition turns rare words into common ones: "LoRA" becomes "Laura", "Orukeet" becomes "or a keet". If
+FreeFlow has Screen Recording permission, it sends a screenshot of the active window when you start recording. The
+backend reads it with Apple's on-device text recognition (Vision) while you speak, picks out the unusual words
+(mixed case like LoRA, acronyms like MLX, words with digits like Qwen3, and capitalised words that aren't in the
+macOS dictionary, such as names). Only the words that sound like something in your transcript are passed to the
+cleanup model ("Laura" matches LoRA, "or a keet" matches Orukeet); most dictations match none and are cleaned up
+exactly as before. The model is told to use a word only to fix something that was misheard, and never to add words
+you didn't say.
+
+- **Private:** the screenshot, the recognised text and the word list stay in memory, are never written to disk or
+  logged (the log only says how many words were found), and are discarded after that one dictation.
+- **Speed:** reading the screenshot takes about 0.4–0.8 s on an M4 and happens while you are still talking. If it
+  hasn't finished when cleanup starts, cleanup waits at most 0.5 s and then goes ahead without it.
+- **Accuracy:** FreeFlow sends a 1024-pixel screenshot, so editor text is only 8–9 pixels tall. On synthetic windows
+  (dark and light themes, 11–14 pt text) the recogniser found 95% of the planted words; a word must be read the same
+  way at least twice before it is used, which filters out most misreads of tiny text. On 16 invented dictations with
+  a misheard on-screen word, cleanup got 13 right with screen words and 7 without; on 77 other test dictations the
+  results were unchanged.
+- **Limits:** names spelled far from how they sound ("voy check" for Wojciech) aren't matched, and when the
+  recogniser writes a different real name ("Siddharth" with "Siddhant" on screen) it is trusted.
+- **Needs** the Xcode Command Line Tools (`xcode-select --install`) to build the helper during `./install.sh`.
+- **Turn it off** with `freeflowctl screen-words off` (or don't give FreeFlow Screen Recording permission).
 
 ## How it works
 

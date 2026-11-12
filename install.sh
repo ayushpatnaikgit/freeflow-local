@@ -37,10 +37,10 @@ if ! command -v uv >/dev/null; then
 fi
 
 echo "Installing to: $DEST"
-mkdir -p "$DEST/logs" "$DEST/ane"
+mkdir -p "$DEST/logs" "$DEST/ane" "$DEST/ocr" "$DEST/bin"
 rm -f "$DEST/parakeet_server.py"  # renamed to server.py in 0.1.0
-for f in server.py fast_tdt.py freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
-         ane/orukeet_ane.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
+for f in server.py fast_tdt.py screen_words.py freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
+         ane/orukeet_ane.swift ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
 chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh" "$DEST/setup-ane.sh"
@@ -56,6 +56,17 @@ for model in "$ASR_MODEL" "$LLM_MODEL"; do
     exit 1
   fi
 done
+
+# Screen words: read FreeFlow's context screenshot on device. Needs the Swift compiler; without it the feature is off.
+if command -v swiftc >/dev/null; then
+  echo "Building the screen-words helper..."
+  if ! { swiftc -O -o "$DEST/bin/screen-ocr" "$DEST/ocr/screen_ocr.swift" && "$DEST/bin/screen-ocr" --selftest >/dev/null; }; then
+    rm -f "$DEST/bin/screen-ocr"
+    echo "Warning: the screen-words helper did not build or pass its self-test; screen words are off." >&2
+  fi
+else
+  echo "Note: Xcode Command Line Tools not found (xcode-select --install), so screen words are off."
+fi
 
 # Neural Engine speech-to-text was switched on earlier (freeflowctl ane on): rebuild its helper for this version.
 if grep -qx "ASR_BACKEND=ane" settings.env 2>/dev/null; then
