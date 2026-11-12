@@ -82,7 +82,7 @@ if (( AUTOSTART )); then
   ./install-autostart.sh
 fi
 if (( CONFIGURE )); then
-  if [[ -d /Applications/FreeFlow.app ]]; then
+  if [[ -d /Applications/FreeFlow.app || -d "$HOME/Applications/FreeFlow.app" ]]; then
     ./freeflowctl configure
   else
     echo "FreeFlow isn't installed yet. Install it from https://github.com/zachlatta/freeflow, then run:"

@@ -28,23 +28,32 @@ running locally on Apple Silicon.
 
 ## Install
 
-1. Install [FreeFlow](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg) and move it to
-   Applications.
-2. Install the backend by pasting this into Terminal:
+Paste this into Terminal:
 
-   ```sh
-   curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh
-   ```
+```sh
+curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh
+```
 
-   This downloads the latest release and checks its checksum, installs [uv](https://docs.astral.sh/uv/) (the Python
-   package manager) if you don't have it, downloads the models (about 6 GB the first time), starts the backend at
-   every login, and points FreeFlow at it. Nothing needs compiling.
-3. Open FreeFlow and finish its setup:
-   - Allow **Microphone** and **Accessibility**.
-   - Allow **Screen Recording** if you want on-screen names and terms spelled correctly. It is optional, and the
-     screenshot never leaves your Mac.
-   - If FreeFlow asks for an API key, type any text, for example `local`.
-   - Keep **context capture** on (the default). It is what starts loading the models as soon as you start recording.
+That one command sets up everything:
+
+- **FreeFlow**, the dictation app (hotkey, microphone, pasting), if you don't have it yet. It downloads the official
+  release from [github.com/zachlatta/freeflow](https://github.com/zachlatta/freeflow) and installs it only after
+  checking that it is signed by FreeFlow's developer and notarized by Apple.
+- **freeflow-local**, the on-device engine that FreeFlow talks to instead of a cloud service: the latest release,
+  checked against its SHA-256, plus [uv](https://docs.astral.sh/uv/) (the Python package manager) if you don't have
+  it, and the models (about 6 GB the first time). It starts at every login, and FreeFlow is pointed at it. Nothing
+  needs compiling.
+
+FreeFlow then opens. Finish its setup:
+
+- Allow **Microphone** and **Accessibility**.
+- Allow **Screen Recording** if you want on-screen names and terms spelled correctly. It is optional, and the
+  screenshot never leaves your Mac.
+- If FreeFlow asks for an API key, type any text, for example `local`.
+- Keep **context capture** on (the default). It is what starts loading the models as soon as you start recording.
+
+Already have FreeFlow? The command leaves it as it is. To skip it entirely, use `sh -s -- --no-freeflow` instead of
+`sh`.
 
 To update, run the same command again.
 
