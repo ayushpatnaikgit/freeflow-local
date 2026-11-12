@@ -321,7 +321,9 @@ async def _with_screen_words(messages: list, task: asyncio.Future | None, transc
     except asyncio.TimeoutError:
         log("screen words not ready in time; cleaned up without them")
         return
-    section = screen_words.prompt_section(screen_words.relevant(words, transcript))
+    found = screen_words.relevant(words, transcript)
+    log(f"screen words: {len(found)} of {len(words)} match the transcript")  # counts only, never the words
+    section = screen_words.prompt_section(found)
     content = messages[-1].get("content")
     marker = "RAW_TRANSCRIPTION:\n<<<RAW_TRANSCRIPTION"
     if section and isinstance(content, str) and content.count(marker) == 1:
