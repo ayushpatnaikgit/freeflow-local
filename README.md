@@ -14,10 +14,10 @@ Loading starts the moment you start recording, so it happens while you speak.
 
 - **Warm (you dictated in the last 10 minutes): about 1 second** from when you stop speaking.
 - **First dictation after a break: about 2 seconds,** with full cleanup: the cleanup model loads while you talk.
-- **If the cleanup model still isn't ready when your text is,** the backend waits at most 1 second
-  (`COLD_WAIT_SECONDS`), then pastes the transcript as it is (punctuated, with uh/um removed) instead of
-  making you wait. The next dictation gets full cleanup. This mostly happens on the first dictation after
-  restarting your Mac, when the cleanup instructions also have to be processed for the first time.
+- **First dictation after restarting your Mac (or the backend) is the slowest,** a few seconds more, because
+  FreeFlow's cleanup instructions are also processed for the first time. They stay cached afterwards. Every
+  dictation, including this one, gets full cleanup: the backend waits for the cleanup model rather than pasting
+  raw text.
 - **After 10 minutes without dictating,** the models unload and memory use drops back to almost nothing.
 
 Measured on an M4 Mac with 24 GB of RAM, 6 s of speech, Neural Engine speech-to-text:
@@ -25,8 +25,7 @@ Measured on an M4 Mac with 24 GB of RAM, 6 s of speech, Neural Engine speech-to-
 | Situation | Gemma 4 E4B (default) | Gemma 4 E2B |
 |---|---|---|
 | Warm | ~0.9 s | ~0.5 s |
-| First dictation after a 10-minute break | ~1.8 s, full cleanup | ~0.6 s, full cleanup |
-| First dictation after a restart | ~1.1 s, no cleanup for that one | ~1.1 s, no cleanup for that one |
+| First dictation after a 10-minute break | ~1.8 s | ~0.6 s |
 
 E2B is faster and smaller (~3.5 GB vs ~5 GB while loaded) but formats less well: in our tests it did not lay
 out emails, turn spoken lists into lists, or punctuate long run-on dictations. Switch with
