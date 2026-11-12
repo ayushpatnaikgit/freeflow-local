@@ -284,12 +284,37 @@ async def chat_completions(request: Request):
             # treats as fatal (no text-only retry). Keep only text so context uses metadata.
             if isinstance(message.get("content"), list):
                 message["content"] = [p for p in message["content"] if p.get("type") == "text"]
+        raw = None
         if (len(messages) >= 2 and messages[0].get("role") == "system"
                 and "RAW_TRANSCRIPTION" in str(messages[-1].get("content", ""))):
             _cleanup_system_prompt = messages[0]["content"]
+            m = _RAW_BLOCK.search(str(messages[-1].get("content", "")))
+            raw = m.group(1).strip() if m else None
         await _ensure_llm()
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
+        if status == 200 and raw:
+            data = _keep_spoken_words(data, raw)
         return Response(content=data, status_code=status, media_type=ctype)
+
+
+_RAW_BLOCK = re.compile(r"<<<RAW_TRANSCRIPTION\n(.*?)\nRAW_TRANSCRIPTION", re.S)
+
+
+def _keep_spoken_words(data: bytes, raw: str) -> bytes:
+    """If cleanup answers EMPTY for a transcript with real words (e.g. "Yeah."), return the transcript.
+
+    Fillers are already stripped after transcription, so anything left is something the user said.
+    """
+    try:
+        body = json.loads(data)
+        message = body["choices"][0]["message"]
+        if message.get("content", "").strip().strip('"').upper() != "EMPTY" or not re.search(r"\w", raw):
+            return data
+        message["content"] = raw
+        log("cleanup returned EMPTY for a non-empty transcript; kept the transcript")
+        return json.dumps(body).encode()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return data
 
 
 @app.post("/v1/audio/transcriptions")
