@@ -127,12 +127,17 @@ if (( CONFIGURE )); then
 fi
 
 APP_NAME=FreeFlow
-[[ "${FREEFLOW_LOCAL_APP:-}" == tellwell ]] && APP_NAME=TellWell
+SETUP_HINT='If it asks for an API key, type any text (e.g. "local"). Screen Recording is optional.'
+if [[ "${FREEFLOW_LOCAL_APP:-}" == tellwell ]]; then
+  APP_NAME=TellWell
+  SETUP_HINT="Then press the key you want to talk with. Screen Recording is optional: it lets TellWell
+     spell names it sees on screen."
+fi
 cat <<EOF
 
 Done. Next steps:
   1. Open $APP_NAME and finish its setup: allow Microphone and Accessibility.
-     If it asks for an API key, type any text (e.g. "local"). Screen Recording is optional.
+     $SETUP_HINT
   2. Hold your dictation key and speak. The first dictation after a break takes a second or two
      while the models load; after that, cleaned text appears about 0.2-0.4 s after you stop.
 
