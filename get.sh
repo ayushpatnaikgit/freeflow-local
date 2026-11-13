@@ -3,13 +3,19 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh
 #
-# 1. Installs FreeFlow (the dictation app) if it isn't installed: downloads the official FreeFlow.dmg from
-#    github.com/zachlatta/freeflow and installs it only if it is signed by FreeFlow's developer and notarized by Apple.
+# 1. Installs the dictation app if it isn't installed:
+#    - FreeFlow (default): the official FreeFlow.dmg from github.com/zachlatta/freeflow, installed only if it is
+#      signed by FreeFlow's developer and notarized by Apple;
+#    - TellWell (--app tellwell): TellWell.dmg from github.com/ayushpatnaikgit/tellwell, installed only if it matches
+#      the SHA-256 published with the release and carries TellWell's bundle identifier with an intact signature.
+#      (TellWell is not yet signed with an Apple Developer ID; files downloaded by curl aren't quarantined, so
+#      macOS opens it without the "could not verify" prompt.)
 # 2. Installs uv (the Python package manager) if missing.
 # 3. Downloads the latest freeflow-local release (source plus prebuilt helpers, so no Xcode tools are needed), checks
 #    its SHA-256 and runs its install.sh, which starts the backend at login and points FreeFlow at it.
 #
-# Options: --no-freeflow (don't install FreeFlow); anything else is passed to install.sh, e.g.
+# Options: --app freeflow|tellwell (default freeflow), --no-freeflow (don't install an app); anything else is passed
+# to install.sh, e.g.
 #   curl -fsSL .../get.sh | sh -s -- --no-configure
 # Environment: FREEFLOW_LOCAL_RELEASE (release download URL), FREEFLOW_DMG_URL, FREEFLOW_APPS_DIR (where to put
 # FreeFlow.app; default /Applications, or ~/Applications if that isn't writable), plus install.sh's
@@ -22,16 +28,30 @@ NAME=freeflow-local-macos-arm64.tar.gz
 FREEFLOW_DMG="${FREEFLOW_DMG_URL:-https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg}"
 FREEFLOW_ID=com.zachlatta.freeflow  # FreeFlow's bundle identifier
 FREEFLOW_TEAM=P6PV2R9443            # Apple Developer team that signs FreeFlow releases
+TELLWELL_BASE="${TELLWELL_RELEASE:-https://github.com/ayushpatnaikgit/tellwell/releases/latest/download}"
+TELLWELL_ID=io.github.ayushpatnaikgit.tellwell
 APPS="${FREEFLOW_APPS_DIR:-}"
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
 INSTALL_FREEFLOW=1
+APP=FreeFlow
+NEXT_IS_APP=0
 for arg in "$@"; do
   shift
+  if [ "$NEXT_IS_APP" = 1 ]; then
+    NEXT_IS_APP=0
+    case "$arg" in
+      freeflow|FreeFlow) APP=FreeFlow ;;
+      tellwell|TellWell) APP=TellWell ;;
+      *) fail "unknown app '$arg' (use freeflow or tellwell)" ;;
+    esac
+    continue
+  fi
   case "$arg" in
     --no-freeflow) INSTALL_FREEFLOW=0 ;;
+    --app) NEXT_IS_APP=1 ;;
     *) set -- "$@" "$arg" ;;
   esac
 done
@@ -49,12 +69,43 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-have_freeflow() {
+have_app() {  # have_app <Name>
   if [ -n "$APPS" ]; then
-    [ -d "$APPS/FreeFlow.app" ]
+    [ -d "$APPS/$1.app" ]
   else
-    [ -d /Applications/FreeFlow.app ] || [ -d "$HOME/Applications/FreeFlow.app" ]
+    [ -d "/Applications/$1.app" ] || [ -d "$HOME/Applications/$1.app" ]
   fi
+}
+
+apps_dir() {
+  dest="$APPS"
+  if [ -z "$dest" ]; then
+    if [ -w /Applications ]; then dest=/Applications; else dest="$HOME/Applications"; fi
+  fi
+  mkdir -p "$dest"
+  printf '%s' "$dest"
+}
+
+install_tellwell() {
+  say "Installing TellWell (the dictation app) from github.com/ayushpatnaikgit/tellwell..."
+  curl -fsSL "$TELLWELL_BASE/TellWell.dmg" -o "$WORK/TellWell.dmg" || fail "could not download TellWell.dmg"
+  curl -fsSL "$TELLWELL_BASE/TellWell.dmg.sha256" -o "$WORK/TellWell.dmg.sha256" || fail "could not download its checksum"
+  expected=$(cut -d' ' -f1 "$WORK/TellWell.dmg.sha256")
+  actual=$(shasum -a 256 "$WORK/TellWell.dmg" | cut -d' ' -f1)
+  [ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for TellWell.dmg; not installing it."
+  mkdir -p "$MOUNT"
+  hdiutil attach -nobrowse -readonly -noautoopen -quiet -mountpoint "$MOUNT" "$WORK/TellWell.dmg" \
+    || fail "could not open the TellWell disk image."
+  app="$MOUNT/TellWell.app"
+  [ -d "$app" ] || fail "the TellWell disk image does not contain TellWell.app."
+  codesign --verify --deep --strict "$app" 2>/dev/null || fail "TellWell's code signature is broken; not installing it."
+  codesign -dv "$app" 2>&1 | grep -qx "Identifier=$TELLWELL_ID" || fail "TellWell.app has the wrong identifier; not installing it."
+  dest=$(apps_dir)
+  rm -rf "$dest/TellWell.app"
+  ditto "$app" "$dest/TellWell.app" || fail "could not copy TellWell to $dest."
+  hdiutil detach -quiet "$MOUNT" 2>/dev/null || true
+  rmdir "$MOUNT" 2>/dev/null || true
+  say "TellWell installed in $dest."
 }
 
 install_freeflow() {
@@ -73,11 +124,7 @@ install_freeflow() {
     || fail "FreeFlow.dmg is not signed by FreeFlow's developer; not installing it. Install FreeFlow yourself from
        https://github.com/zachlatta/freeflow, then run this again."
   spctl --assess --type execute "$app" 2>/dev/null || fail "FreeFlow is not notarized by Apple; not installing it."
-  dest="$APPS"
-  if [ -z "$dest" ]; then
-    if [ -w /Applications ]; then dest=/Applications; else dest="$HOME/Applications"; fi
-  fi
-  mkdir -p "$dest"
+  dest=$(apps_dir)
   ditto "$app" "$dest/FreeFlow.app" || fail "could not copy FreeFlow to $dest."
   hdiutil detach -quiet "$MOUNT" 2>/dev/null || true
   rmdir "$MOUNT" 2>/dev/null || true
@@ -85,7 +132,17 @@ install_freeflow() {
 }
 
 if [ "$INSTALL_FREEFLOW" = 1 ]; then
-  if have_freeflow; then say "FreeFlow is already installed."; else install_freeflow; fi
+  if [ "$APP" = TellWell ]; then
+    install_tellwell  # always the latest release, so running this again updates TellWell
+  elif have_app FreeFlow; then
+    say "FreeFlow is already installed."
+  else
+    install_freeflow
+  fi
+fi
+if [ "$APP" = TellWell ]; then
+  FREEFLOW_LOCAL_APP=tellwell
+  export FREEFLOW_LOCAL_APP  # install.sh points TellWell (only) at the engine
 fi
 
 if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then

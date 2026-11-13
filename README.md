@@ -58,7 +58,8 @@ FreeFlow then opens. Finish its setup:
 - If FreeFlow asks for an API key, type any text, for example `local`.
 - Keep **context capture** on (the default). It is what starts loading the models as soon as you start recording.
 
-Already have FreeFlow? The command leaves it as it is. To skip it entirely, use `sh -s -- --no-freeflow` instead of
+Prefer [TellWell](https://github.com/ayushpatnaikgit/tellwell), the FreeFlow fork built around this engine? Use
+`sh -s -- --app tellwell` instead of `sh`, or TellWell's own one-liner. Already have FreeFlow? The command leaves it as it is. To skip it entirely, use `sh -s -- --no-freeflow` instead of
 `sh`.
 
 To update, run the same command again.
