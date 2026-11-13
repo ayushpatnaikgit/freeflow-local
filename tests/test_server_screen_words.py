@@ -38,7 +38,7 @@ class ScreenWordsServerTest(unittest.TestCase):
     def test_adds_words_to_user_message_not_system_prompt(self):
         async def go():
             messages = [{"role": "system", "content": "SYSTEM"}, {"role": "user", "content": CLEANUP_USER}]
-            await server._with_screen_words(messages, done(["LoRA", "MLX", "Grafana"]), "Train a Laura adapter.")
+            await server._with_word_hints(messages, done(["LoRA", "MLX", "Grafana"]), "Train a Laura adapter.", [])
             return messages
         messages = asyncio.run(go())
         self.assertEqual(messages[0]["content"], "SYSTEM")
@@ -52,8 +52,8 @@ class ScreenWordsServerTest(unittest.TestCase):
     def test_no_words_or_no_task_leaves_request_unchanged(self):
         async def go(task_words):
             messages = [{"role": "system", "content": "SYSTEM"}, {"role": "user", "content": CLEANUP_USER}]
-            await server._with_screen_words(messages, None if task_words is None else done(task_words),
-                                            "Train a Laura adapter.")
+            await server._with_word_hints(messages, None if task_words is None else done(task_words),
+                                          "Train a Laura adapter.", [])
             return messages[1]["content"]
         self.assertEqual(asyncio.run(go(None)), CLEANUP_USER)
         self.assertEqual(asyncio.run(go([])), CLEANUP_USER)
@@ -65,11 +65,30 @@ class ScreenWordsServerTest(unittest.TestCase):
             messages = [{"role": "system", "content": "SYSTEM"}, {"role": "user", "content": CLEANUP_USER}]
             saved, server.SCREEN_WORDS_WAIT = server.SCREEN_WORDS_WAIT, 0.05
             try:
-                await server._with_screen_words(messages, slow, "Train a Laura adapter.")
+                await server._with_word_hints(messages, slow, "Train a Laura adapter.", [])
             finally:
                 server.SCREEN_WORDS_WAIT = saved
             return messages[1]["content"]
         self.assertEqual(asyncio.run(go()), CLEANUP_USER)
+
+    def test_vocabulary_terms_that_sound_like_the_transcript_are_hinted(self):
+        # "or who keat" is three words, which boosting in the recogniser can't merge; the sound-matcher can
+        user = CLEANUP_USER.replace("Train a Laura adapter.", "We should use or who keat for speech.")
+
+        async def go(task, vocabulary):
+            messages = [{"role": "system", "content": "SYSTEM"}, {"role": "user", "content": user}]
+            await server._with_word_hints(messages, task, "We should use or who keat for speech.", vocabulary)
+            return messages[1]["content"]
+        hinted = asyncio.run(go(None, ["Orukeet", "Zentrix"]))  # no screenshot needed
+        self.assertIn("): Orukeet\n", hinted)
+        self.assertEqual(asyncio.run(go(None, ["Zentrix", "Halvorsen"])), user)  # nothing sounds like them
+
+    def test_vocabulary_and_screen_words_are_combined_once(self):
+        async def go():
+            messages = [{"role": "system", "content": "SYSTEM"}, {"role": "user", "content": CLEANUP_USER}]
+            await server._with_word_hints(messages, done(["LoRA", "lora"]), "Train a Laura adapter.", ["LoRA"])
+            return messages[1]["content"]
+        self.assertIn("): LoRA\n", asyncio.run(go()))
 
     def test_task_is_used_once_and_expires(self):
         async def go():

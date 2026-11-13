@@ -108,7 +108,7 @@ _NUMBERS = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "fiv
             # ordinals: "8-bit" is often heard as "eighth bit"
             "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5", "sixth": "6", "seventh": "7",
             "eighth": "8", "ninth": "9", "tenth": "10"}
-_SOUNDS = (("ph", "f"), ("ck", "k"), ("qu", "k"), ("q", "k"), ("c", "k"), ("x", "ks"), ("z", "s"), ("w", "v"),
+_SOUNDS = (("wh", "h"), ("ph", "f"), ("ck", "k"), ("qu", "k"), ("q", "k"), ("c", "k"), ("x", "ks"), ("z", "s"), ("w", "v"),
            ("dh", "d"), ("th", "t"), ("gh", "g"))
 
 

@@ -121,6 +121,9 @@ SCREEN_WORDS_MAX_AGE = 300.0  # seconds from recording start (context request) t
 # words tip close calls in the recogniser toward those spellings. Only whole terms are accepted. Off by default.
 ASR_BOOST = os.environ.get("ASR_BOOST", "0") == "1"
 BOOST_MAX_TERMS = 100
+# Vocabulary terms that sound like part of the transcript are handed to cleanup like screen words. This catches a term
+# the recogniser split into several words ("or who keat"), which boosting can't fix.
+VOCAB_HINTS = os.environ.get("VOCAB_HINTS", "1") != "0"
 SCREEN_WORDS_WAIT = 0.5  # at cleanup, wait at most this long for OCR still running (it normally finished during speech)
 
 
@@ -403,18 +406,23 @@ def _take_screen_task() -> asyncio.Future | None:
     return task
 
 
-async def _with_screen_words(messages: list, task: asyncio.Future | None, transcript: str) -> None:
-    """Add the screen words that sound like part of the transcript to the cleanup request's user message (not the
-    system prompt, which stays cached). Most dictations match none, and then the request is unchanged."""
-    if task is None:
+async def _with_word_hints(messages: list, task: asyncio.Future | None, transcript: str,
+                           vocabulary: list[str]) -> None:
+    """Add the screen words and vocabulary terms that sound like part of the transcript ("or who keat" -> Orukeet)
+    to the cleanup request's user message (not the system prompt, which stays cached). They use the SCREEN_WORDS
+    section the fine-tuned model was trained on. Most dictations match none, and then the request is unchanged."""
+    words: list[str] = []
+    if task is not None:
+        try:
+            words = await asyncio.wait_for(asyncio.shield(task), SCREEN_WORDS_WAIT)
+        except asyncio.TimeoutError:
+            log("screen words not ready in time; cleaned up without them")
+    if not words and not vocabulary:
         return
-    try:
-        words = await asyncio.wait_for(asyncio.shield(task), SCREEN_WORDS_WAIT)
-    except asyncio.TimeoutError:
-        log("screen words not ready in time; cleaned up without them")
-        return
-    found = screen_words.relevant(words, transcript)
-    log(f"screen words: {len(found)} of {len(words)} match the transcript")  # counts only, never the words
+    found = screen_words.relevant(vocabulary + [w for w in words if w.lower() not in {v.lower() for v in vocabulary}],
+                                  transcript)
+    log(f"word hints: {len(found)} match the transcript "  # counts only, never the words
+        f"(of {len(words)} screen words, {len(vocabulary)} vocabulary terms)")
     section = screen_words.prompt_section(found)
     content = messages[-1].get("content")
     marker = "RAW_TRANSCRIPTION:\n<<<RAW_TRANSCRIPTION"
@@ -639,7 +647,9 @@ async def chat_completions(request: Request):
             raw = m.group(1).strip() if m else None
         screen_task = _take_screen_task() if raw is not None else None
         await _ensure_llm()
-        await _with_screen_words(messages, screen_task, raw or "")
+        if raw is not None:
+            vocabulary = vocabulary_terms(messages[0]["content"]) if VOCAB_HINTS else []
+            await _with_word_hints(messages, screen_task, raw, vocabulary)
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
             data = _keep_spoken_words(data, raw)
