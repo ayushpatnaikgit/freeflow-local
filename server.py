@@ -117,6 +117,10 @@ STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm 
 SCREEN_WORDS = os.environ.get("SCREEN_WORDS", "1") != "0"  # use words read from FreeFlow's context screenshot
 OCR_HELPER = HERE / "bin" / "screen-ocr"
 SCREEN_WORDS_MAX_AGE = 300.0  # seconds from recording start (context request) to cleanup; older words are ignored
+# Vocabulary boosting in Orukeet (Neural Engine only): the user's FreeFlow vocabulary and this dictation's screen
+# words tip close calls in the recogniser toward those spellings. Only whole terms are accepted. Off by default.
+ASR_BOOST = os.environ.get("ASR_BOOST", "0") == "1"
+BOOST_MAX_TERMS = 100
 SCREEN_WORDS_WAIT = 0.5  # at cleanup, wait at most this long for OCR still running (it normally finished during speech)
 
 
@@ -143,16 +147,18 @@ class _AneHelper:
             raise RuntimeError(ready.get("error", "orukeet-ane did not start"))
         log(f"asr (Neural Engine) loaded in {time.perf_counter() - t:.2f}s")
 
-    def transcribe(self, path: str) -> str:
+    def transcribe(self, path: str, boost: list[str] | None = None) -> str:
         with wave.open(path, "rb") as w:
             ok = w.getnchannels() == 1 and w.getsampwidth() == 2 and w.getframerate() == 16000
         if not ok:
             raise ValueError("Neural Engine path needs 16 kHz mono 16-bit WAV")
-        self.proc.stdin.write(path + "\n")
+        self.proc.stdin.write(helper_request(path, boost) + "\n")
         self.proc.stdin.flush()
         reply = json.loads(self.proc.stdout.readline() or '{"error": "helper exited"}')
         if "error" in reply:
             raise RuntimeError(reply["error"])
+        if boost:
+            log(f"asr boost: {len(boost)} terms, {reply.get('boosted', 0)} swapped in")  # counts only
         return reply["text"]
 
     def close(self) -> None:
@@ -162,6 +168,34 @@ class _AneHelper:
                 self.proc.wait(5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+
+
+def helper_request(path: str, boost: list[str] | None) -> str:
+    """One stdin line for orukeet-ane: the bare path (today's protocol), or JSON with the terms to boost."""
+    return json.dumps({"path": path, "boost": boost}) if boost else path
+
+
+_VOCAB_MARKER = "Use these spellings exactly in the output when relevant:\n"
+
+
+def vocabulary_terms(system_prompt: str | None) -> list[str]:
+    """The user's FreeFlow vocabulary: FreeFlow appends it as the last line of the cleanup system prompt."""
+    if not system_prompt or _VOCAB_MARKER not in system_prompt:
+        return []
+    line = system_prompt.rsplit(_VOCAB_MARKER, 1)[1].split("\n", 1)[0]
+    return [t.strip() for t in line.split(",") if t.strip()]
+
+
+def boost_terms(vocabulary: list[str], screen: list[str]) -> list[str]:
+    """Vocabulary first, then screen words; one spelling per term, at least 3 letters or digits, capped."""
+    out, seen = [], set()
+    for term in vocabulary + screen:
+        key = term.lower()
+        if len(re.sub(r"[^a-z0-9]", "", key)) < 3 or key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+    return out[:BOOST_MAX_TERMS]
 
 
 _ane: _AneHelper | None = None
@@ -218,13 +252,13 @@ def _unload_asr() -> None:
         log("asr unloaded")
 
 
-def _transcribe(path: str) -> str:
+def _transcribe(path: str, boost: list[str] | None = None) -> str:
     global _ane, _ane_failed
     _load_asr()
     text = None
     if _ane is not None:
         try:
-            text = _ane.transcribe(path)
+            text = _ane.transcribe(path, boost)
         except ValueError:
             pass  # not 16 kHz mono WAV: MLX reads any format via ffmpeg
         except Exception as e:  # noqa: BLE001
@@ -348,6 +382,14 @@ def _start_screen_words(messages: list) -> None:
         return
     _screen_task = asyncio.get_running_loop().run_in_executor(_ocr_pool, _read_screen, url)
     _screen_task_at = time.monotonic()
+
+
+def _peek_screen_words() -> list[str]:
+    """This dictation's screen words if OCR has already finished; never waits, and leaves them for cleanup."""
+    task = _screen_task
+    if task is None or not task.done() or task.cancelled() or time.monotonic() - _screen_task_at > SCREEN_WORDS_MAX_AGE:
+        return []
+    return task.result() if task.exception() is None else []
 
 
 def _take_screen_task() -> asyncio.Future | None:
@@ -563,6 +605,7 @@ async def health():
             "asr_backend": "ane" if _ane is not None else ("mlx" if _asr is not None else ASR_BACKEND),
             "llm_running": _llm_alive(),
             "screen_words": SCREEN_WORDS and not _ocr_failed and OCR_HELPER.exists(),
+            "asr_boost": ASR_BOOST,
             "idle_seconds": round(time.monotonic() - _last_activity),
             "idle_unload_after": IDLE_UNLOAD_SECONDS, "asr_model": ASR_MODEL, "llm_model": LLM_MODEL}
 
@@ -650,7 +693,8 @@ async def transcriptions(
             path = tmp.name
         try:
             t = time.perf_counter()
-            text = await asyncio.get_running_loop().run_in_executor(_mlx, _transcribe, path)
+            boost = boost_terms(vocabulary_terms(_cleanup_system_prompt), _peek_screen_words()) if ASR_BOOST else None
+            text = await asyncio.get_running_loop().run_in_executor(_mlx, _transcribe, path, boost)
             log(f"asr {(time.perf_counter() - t) * 1000:.0f}ms chars={len(text)}")
         finally:
             os.unlink(path)
