@@ -8,8 +8,9 @@
 #   freeflowctl logs        follow the logs
 #   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
 #   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
-#   freeflowctl model e4b|e2b|<hf id>   cleanup model: Gemma 4 E4B (default, better) or E2B (faster, smaller)
-#   freeflowctl model s1 [dir]          experimental: S1-mini fine-tuned, as an adapter or merged model folder
+#   freeflowctl model s1|e4b|e2b|<hf id>  cleanup model: S1-mini fine-tuned for FreeFlow (default, fastest),
+#                                        Gemma 4 E4B (for custom prompts or edit mode) or E2B
+#   freeflowctl model s1 <dir>          S1-mini fine-tuned locally, as an adapter or merged model folder
 #   freeflowctl screen-words on|off      spell on-screen names and terms right, using FreeFlow's context screenshot
 #   freeflowctl asr-warm on|off          keep the speech model loaded when idle (only the cleanup LLM unloads)
 #   freeflowctl boost on|off             experimental: steer the Neural Engine recogniser toward your vocabulary
@@ -45,8 +46,10 @@ case "${1:-status}" in
       e2b) id=mlx-community/gemma-4-e2b-it-4bit ;;
       s1)  # experimental, not shipped in releases: S1-mini fine-tuned locally, as a LoRA adapter folder
            # (adapters.safetensors) or as a merged, possibly quantized, model folder (config.json)
-        dir="${3:-adapters/s1-mini}"; [[ -d "$D/$dir" ]] && dir="$D/$dir"
-        if [[ -f "$dir/adapters.safetensors" ]]; then
+        dir="${3:-}"; [[ -n "$dir" && -d "$D/$dir" ]] && dir="$D/$dir"
+        if [[ -z "$dir" ]]; then
+          id=ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit; tuned=1
+        elif [[ -f "$dir/adapters.safetensors" ]]; then
           id=mlx-community/S1-mini-MLX-bf16; adapter="${3:-adapters/s1-mini}"
         elif [[ -f "$dir/config.json" ]]; then
           id="${dir:A}"; merged=1
@@ -54,7 +57,7 @@ case "${1:-status}" in
           echo "No adapter or model at $dir (needs adapters.safetensors, or a model's config.json)" >&2; exit 1
         fi ;;
       */*) id=$2 ;;
-      *) echo "usage: freeflowctl model e4b|e2b|s1 [adapter dir]|<huggingface id>" >&2; exit 1 ;;
+      *) echo "usage: freeflowctl model s1 [dir]|e4b|e2b|<huggingface id>" >&2; exit 1 ;;
     esac
     rev=$(awk -v m="$id" '$1 == m {print $2}' "$D/pinned-models.txt" 2>/dev/null)
     pin=(); [[ -n "$rev" ]] && pin=(--revision "$rev")
@@ -62,7 +65,7 @@ case "${1:-status}" in
       || { echo "Download failed for $id" >&2; exit 1; }
     set_setting LLM_MODEL "$id"
     set_setting LLM_ADAPTER "$adapter"
-    set_setting LLM_PROMPT "$([[ -n "$adapter" || -n "${merged:-}" ]] && echo compact || echo freeflow)"
+    set_setting LLM_PROMPT "$([[ -n "$adapter" || -n "${merged:-}" || -n "${tuned:-}" ]] && echo compact || echo freeflow)"
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Cleanup model: $id${adapter:+ + adapter $adapter}. Backend restarted." ;;
   ane)
@@ -190,5 +193,5 @@ with os.fdopen(fd, "w") as f:
 print("FreeFlow API Base URL ->", url)
 EOF
     open -a FreeFlow ;;
-  *) sed -n '2,19p' "$0"; exit 1 ;;
+  *) sed -n '2,20p' "$0"; exit 1 ;;
 esac

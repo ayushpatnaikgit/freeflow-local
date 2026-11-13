@@ -84,3 +84,10 @@ class KeepAsrLoadedTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultModelTest(unittest.TestCase):
+    def test_default_model_uses_the_compact_prompt(self):
+        self.assertEqual(server.DEFAULT_LLM_MODEL, "ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit")
+        pins = server.read_pins((server.HERE / "pinned-models.txt").read_text())
+        self.assertIn(server.DEFAULT_LLM_MODEL, pins)  # new installs get the exact published version

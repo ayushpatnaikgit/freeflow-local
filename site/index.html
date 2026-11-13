@@ -202,15 +202,15 @@
       <span class="eyebrow"><i></i>100% on-device · Apple Silicon</span>
       <h1>Speak. It types.<br><span class="grad">Nothing leaves your Mac.</span></h1>
       <p class="lede">Dictation that runs <b>entirely on your Mac</b>: transcribed on the Neural Engine in a blink, polished by
-        an on-device AI that <b>reads your screen</b> to get names and jargon right. <b>Under a second</b> from your last word
-        to clean text. No cloud. No account. No internet needed.</p>
+        a small AI <b>fine-tuned for dictation</b> that <b>reads your screen</b> to get names and jargon right. <b>About
+        0.2–0.4 s</b> from your last word to clean text. No cloud. No account. No internet needed.</p>
       <div class="install">
         <span class="prompt">$</span>
         <code id="cmd">curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh | sh</code>
         <button type="button" class="copy">Copy</button>
       </div>
       <p class="fine">One line in Terminal installs everything, including the <a href="https://github.com/zachlatta/freeflow">FreeFlow</a>
-        app if you don't have it. Free and open source · Apple Silicon, macOS 14+, 16 GB RAM.</p>
+        app if you don't have it. Free and open source · Apple Silicon, macOS 14+, 8 GB RAM.</p>
     </div>
 
     <div class="window" aria-label="Example: a misheard word fixed using the screen">
@@ -230,7 +230,7 @@
 
   <div class="stats">
     <div class="stat"><div class="n grad">~0.15 s</div><div class="l">speech-to-text on the Apple Neural Engine</div></div>
-    <div class="stat"><div class="n">&lt; 1 s</div><div class="l">from your last word to clean, punctuated text, once warm</div></div>
+    <div class="stat"><div class="n">~0.4 s</div><div class="l">from your last word to clean text for a two-line message, once warm</div></div>
     <div class="stat"><div class="n">0 bytes</div><div class="l">of your voice, text or screen sent anywhere</div></div>
     <div class="stat"><div class="n">100%</div><div class="l">offline once installed. No account, no API key, no bill</div></div>
   </div>
@@ -240,7 +240,7 @@
     <h2>The slow parts happen while you're still talking.</h2>
     <p class="sub">The moment you start recording, the models wake up, the cleanup instructions are cached and your screen
       is read. By the time you stop, all that's left is the fast part.</p>
-    <div class="timeline" role="img" aria-label="Timeline: loading, caching and screen reading overlap with speaking; after you stop, transcription takes about 0.15 s and cleanup under a second">
+    <div class="timeline" role="img" aria-label="Timeline: loading, caching and screen reading overlap with speaking; after you stop, transcription takes about 0.15 s and cleanup about 0.25 s">
       <div class="tl">
         <span class="stopline"></span><span class="stoplabel">you stop talking</span>
         <span class="name">You</span><div class="track"><div class="bar b-talk">speaking…</div></div>
@@ -249,7 +249,7 @@
         <span class="name">Speech</span><div class="track"><div class="bar b-asr" title="~0.15 s"></div></div>
         <span class="name">Polish</span><div class="track"><div class="bar b-llm">clean up</div></div>
       </div>
-      <div class="tl-foot"><span>Warm, after you stop: <b>~0.9 s</b> to finished text</span><span>Speech-to-text: <b>~0.15 s</b></span><span>Models idle out after 10 min, so memory is free when you're not dictating</span></div>
+      <div class="tl-foot"><span>Warm, after you stop: <b>~0.4 s</b> to finished text</span><span>Speech-to-text: <b>~0.15 s</b></span><span>Models idle out after 10 min, so memory is free when you're not dictating</span></div>
     </div>
     <div class="speedgrid">
       <div class="card"><div class="big grad">Neural Engine</div><p>Speech recognition runs on Apple's dedicated, power-efficient AI chip, leaving the GPU
@@ -270,9 +270,9 @@
       <div class="card"><h3>Names</h3><p>Colleagues and tools, spelled like your screen spells them.</p>
         <div class="ba"><div class="in"><small>Heard</small>Ask Sid hunt to check the graph Ana dashboard.</div>
           <div class="out"><small>Typed</small>Ask <mark>Siddhant</mark> to check the <mark>Grafana</mark> dashboard.</div></div></div>
-      <div class="card"><h3>Jargon</h3><p>Technical terms stop turning into nonsense.</p>
-        <div class="ba"><div class="in"><small>Heard</small>We store the vectors in post gress with PG vector on super base.</div>
-          <div class="out"><small>Typed</small>We store the vectors in <mark>Postgres</mark> with <mark>pgvector</mark> on <mark>Supabase</mark>.</div></div></div>
+      <div class="card"><h3>Jargon</h3><p>Technical terms stop turning into nonsense, even mid-correction.</p>
+        <div class="ba"><div class="in"><small>Heard</small>We should use parakeet, no actually, or a keet for the speech model.</div>
+          <div class="out"><small>Typed</small>We should use <mark>Orukeet</mark> for the speech model.</div></div></div>
       <div class="card"><h3>Places</h3><p>Even the long ones.</p>
         <div class="ba"><div class="in"><small>Heard</small>The Tiruchi rapalli office needs six new laptops.</div>
           <div class="out"><small>Typed</small>The <mark>Tiruchirappalli</mark> office needs six new laptops.</div></div></div>
@@ -297,7 +297,7 @@
           <div class="out"><small>Typed</small>Write an email to the team saying the release is delayed until Monday.</div></div>
         <p style="margin-top:10px;font-size:14px">It types what you said. It doesn't go off and write the email.</p></div>
     </div>
-    <p class="note">Examples are real outputs from our test suite with the default model, Gemma 4 E4B, where the right spelling was visible on screen.</p>
+    <p class="note">Examples are real outputs from our test suite with the default model, the fine-tuned S1-mini, where the right spelling was visible on screen.</p>
   </section>
 
   <section id="local">
@@ -326,8 +326,8 @@
     <div class="stack">
       <div class="card"><h3>Orukeet</h3><p>A multilingual fine-tune of NVIDIA Parakeet TDT 0.6B, run through Core ML on the
         Neural Engine.</p><span class="chip">Neural Engine · Core ML</span></div>
-      <div class="card"><h3>Gemma 4 E4B</h3><p>Google's on-device language model cleans up and formats, loaded on demand through
-        Apple's MLX.</p><span class="chip">GPU · MLX</span></div>
+      <div class="card"><h3>S1-mini, fine-tuned</h3><p>Superwhisper's S1-mini (0.6B), fine-tuned on dictation cleanup and quantized to
+        6-bit: 473 MB, loaded on demand through Apple's MLX. <a href="https://huggingface.co/ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit">Model page</a>.</p><span class="chip">GPU · MLX</span></div>
       <div class="card"><h3>Apple Vision</h3><p>On-device text recognition reads the window you're dictating into, tuned to catch
         small editor text.</p><span class="chip">On-device OCR</span></div>
     </div>
@@ -338,14 +338,14 @@
     <h2>Faster with every new model.</h2>
     <div class="cards">
       <div class="card"><div class="icon c-violet"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg></div>
-        <h3>Neural Engine first</h3><p>Move as much as possible onto Apple's AI chip: screen reading next, and the cleanup model
-        as Apple's on-device tools mature.</p></div>
+        <h3>Learns your words</h3><p>Fix a misheard name once and it's spelled right from then on. In testing today, next
+        inside the FreeFlow app itself.</p></div>
       <div class="card"><div class="icon c-amber"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
-        <h3>Much faster cleanup</h3><p>Swap in better small models as they ship, each one measured on the same test dictations.
-        Parallel cleanup already made long dictations twice as fast in testing.</p></div>
+        <h3>Hears your vocabulary</h3><p>The speech model is nudged toward your names and terms while it listens, not just
+        corrected afterwards. Experimental today.</p></div>
       <div class="card"><div class="icon c-cyan"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg></div>
-        <h3>Fine-tuned for dictation</h3><p>An adapter trained on dictation itself, so a smaller, faster model matches today's
-        quality. Synthetic and public data only.</p></div>
+        <h3>Better small models</h3><p>Each new model is measured on the same test dictations before it becomes the default.
+        Training data stays synthetic and public, never anyone's dictations.</p></div>
     </div>
   </section>
 
@@ -367,9 +367,9 @@
 </main>
 
 <footer>
-  <div class="wrap">Apache License 2.0. Model weights keep their own licences: Orukeet is CC BY-SA 4.0 (Oruk AI), Gemma 4 is
-    Apache 2.0 (Google). Timings measured on an M4 Mac with 24 GB of RAM and 6 s of speech. Not affiliated with FreeFlow,
-    Oruk AI, NVIDIA, Google or Apple.</div>
+  <div class="wrap">Apache License 2.0. Model weights keep their own licences: Orukeet is CC BY-SA 4.0 (Oruk AI); the cleanup model
+    is built on S1-mini by Superwhisper (Apache 2.0 plus a naming clause). Timings measured on an M4 Mac with 24 GB of RAM,
+    speech-to-text on the Neural Engine. Not affiliated with FreeFlow, Oruk AI, Superwhisper, NVIDIA, Google or Apple.</div>
 </footer>
 
 <script>

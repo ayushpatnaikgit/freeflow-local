@@ -64,7 +64,9 @@ ANE_BUNDLE = HERE / "coreml" / "orukeet-r3-coreml-greedy"
 ANE_CACHE = HERE / "coreml" / "compiled"
 ANE_HELPER = HERE / "bin" / "orukeet-ane"
 ASR_MODEL = os.environ.get("ASR_MODEL", "itsreidar/orukeet-mlx")
-LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
+# Default cleanup model: S1-mini (Superwhisper) fine-tuned for FreeFlow's cleanup requests, MLX 6-bit (473 MB).
+DEFAULT_LLM_MODEL = "ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit"
+LLM_MODEL = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
 
 
 def read_pins(text: str) -> dict[str, str]:
@@ -108,7 +110,8 @@ LLM_SOURCE = model_source(LLM_MODEL)
 LLM_ADAPTER = adapter_path(os.environ.get("LLM_ADAPTER", ""))
 # mlx_lm.server attaches --adapter-path only to "default_model"; naming the model loads a second copy WITHOUT it.
 LLM_REQUEST_MODEL = "default_model" if LLM_ADAPTER else LLM_SOURCE
-LLM_PROMPT = os.environ.get("LLM_PROMPT", "freeflow")  # "compact": swap FreeFlow's default prompt for the trained one
+# "compact": swap FreeFlow's default prompt for the one the fine-tuned model was trained on; "freeflow": pass it through
+LLM_PROMPT = os.environ.get("LLM_PROMPT") or ("compact" if "S1-mini-FreeFlow" in LLM_MODEL else "freeflow")
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 # Keep the speech model loaded when idle (only the cleanup LLM unloads). It is small, and a cold Neural Engine

@@ -10,7 +10,7 @@ set -euo pipefail
 SRC="${0:A:h}"
 DEST="${FREEFLOW_LOCAL_DIR:-$HOME/Library/Application Support/FreeFlowLocal}"
 ASR_MODEL="itsreidar/orukeet-mlx"
-export LLM_MODEL="${LLM_MODEL:-mlx-community/gemma-4-e4b-it-4bit}"
+export LLM_MODEL="${LLM_MODEL:-ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit}"
 AUTOSTART=1
 CONFIGURE=1
 for arg in "$@"; do
@@ -24,7 +24,7 @@ done
 
 [[ "$(uname -m)" == arm64 ]] || { echo "This needs an Apple Silicon Mac (M1 or later); MLX does not run on Intel." >&2; exit 1; }
 mem_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-(( mem_gb >= 16 )) || echo "Warning: ${mem_gb} GB of RAM. The models use about 6.5 GB while you dictate; 16 GB or more is recommended."
+(( mem_gb >= 8 )) || echo "Warning: ${mem_gb} GB of RAM. The models use about 3 GB while you dictate; 8 GB or more is recommended."
 
 if ! command -v uv >/dev/null; then
   if command -v brew >/dev/null; then
@@ -48,7 +48,7 @@ chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh" "$DES
 cd "$DEST"
 echo "Setting up Python environment..."
 uv sync --frozen --quiet --compile-bytecode
-echo "Downloading models (about 6 GB the first time; later runs skip this)..."
+echo "Downloading models (about 2 GB the first time; later runs skip this)..."
 for model in "$ASR_MODEL" "$LLM_MODEL"; do
   # The exact version from pinned-models.txt when the model is listed there; only show output if it fails.
   rev=$(awk -v m="$model" '$1 == m {print $2}' pinned-models.txt)
