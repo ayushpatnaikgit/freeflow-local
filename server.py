@@ -652,7 +652,7 @@ async def chat_completions(request: Request):
             await _with_word_hints(messages, screen_task, raw, vocabulary)
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
-            data = _keep_spoken_words(data, raw)
+            data = _guard_output(_keep_spoken_words(data, raw), raw)
         return Response(content=data, status_code=status, media_type=ctype)
 
 
@@ -671,6 +671,33 @@ def _use_prompt_style(messages: list) -> None:
     if not _prompt_note_logged:  # once per run; says which path, never the prompt itself
         log("cleanup prompt: compact" if compact is not None else "cleanup prompt: custom, passed through unchanged")
         _prompt_note_logged = True
+
+
+def expanded_too_much(raw: str, cleaned: str) -> tuple[bool, bool]:
+    """(warn, revert) for a cleanup that came back much longer than what was said. Cleanup only removes or reformats
+    words, so a long answer to a 1-3 word transcript ("Hmm." -> a whole sentence) is invented: keep the transcript."""
+    n_raw, n_out = len(re.findall(r"\w+", raw)), len(re.findall(r"\w+", cleaned))
+    warn = n_out >= n_raw + 5 and n_out > 1.5 * n_raw
+    return warn, warn and n_raw <= 3
+
+
+def _guard_output(data: bytes, raw: str) -> bytes:
+    """Log (counts only) when cleanup adds many words; for a 1-3 word transcript, return the transcript instead."""
+    try:
+        body = json.loads(data)
+        message = body["choices"][0]["message"]
+        warn, revert = expanded_too_much(raw, message.get("content") or "")
+        if not warn:
+            return data
+        n_raw, n_out = len(re.findall(r"\w+", raw)), len(re.findall(r"\w+", message.get("content") or ""))
+        if not revert:
+            log(f"cleanup added words: {n_raw}-word transcript -> {n_out} words")
+            return data
+        log(f"cleanup turned a {n_raw}-word transcript into {n_out} words; kept the transcript")
+        message["content"] = raw
+        return json.dumps(body).encode()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return data
 
 
 def _keep_spoken_words(data: bytes, raw: str) -> bytes:

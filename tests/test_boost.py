@@ -80,6 +80,30 @@ class HelperCapabilityTest(unittest.TestCase):
         self.assertEqual(json.loads(h.proc.stdin.getvalue()), {"path": path, "boost": ["Zentrix"]})
 
 
+class ExpansionGuardTest(unittest.TestCase):
+    def reply(self, text):
+        return json.dumps({"choices": [{"message": {"role": "assistant", "content": text}}]}).encode()
+
+    def content(self, data):
+        return json.loads(data)["choices"][0]["message"]["content"]
+
+    def test_short_transcript_turned_into_a_sentence_is_reverted(self):
+        out = server._guard_output(self.reply("I think we should move the meeting to Thursday afternoon."), "Hmm.")
+        self.assertEqual(self.content(out), "Hmm.")
+
+    def test_normal_cleanups_pass(self):
+        for raw, cleaned in [("um so lets meet at five no wait six", "Let's meet at six."),
+                             ("hi dana comma thanks for the notes", "Hi Dana,\n\nThanks for the notes."),
+                             ("Yeah.", "Yeah."), ("ten thirty", "10:30"), ("dash dash fix", "--fix")]:
+            self.assertEqual(self.content(server._guard_output(self.reply(cleaned), raw)), cleaned)
+
+    def test_longer_transcripts_only_warn(self):
+        raw = "so the first thing is the budget and the second thing is the timeline"
+        long = raw + " and also we need to finish the slides by Friday and send them over to the team"
+        self.assertEqual(server.expanded_too_much(raw, long), (True, False))
+        self.assertEqual(self.content(server._guard_output(self.reply(long), raw)), long)
+
+
 class PeekScreenWordsTest(unittest.TestCase):
     def test_uses_finished_task_without_consuming_it(self):
         async def run():
