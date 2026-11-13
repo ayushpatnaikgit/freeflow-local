@@ -11,6 +11,7 @@
 #   freeflowctl model e4b|e2b|<hf id>   cleanup model: Gemma 4 E4B (default, better) or E2B (faster, smaller)
 #   freeflowctl model s1 [adapter dir]  experimental: S1-mini + a fine-tuned adapter (default dir: adapters/s1-mini)
 #   freeflowctl screen-words on|off      spell on-screen names and terms right, using FreeFlow's context screenshot
+#   freeflowctl asr-warm on|off          keep the speech model loaded when idle (only the cleanup LLM unloads)
 set -euo pipefail
 D="${0:A:h}"
 URL="http://127.0.0.1:8081/v1"
@@ -68,6 +69,14 @@ case "${1:-status}" in
     esac
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Screen words: $2. Backend restarted." ;;
+  asr-warm)
+    case "${2:-}" in
+      on)  set_setting KEEP_ASR_LOADED 1 ;;
+      off) set_setting KEEP_ASR_LOADED 0 ;;
+      *) echo "usage: freeflowctl asr-warm on|off" >&2; exit 1 ;;
+    esac
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Speech model $([[ $2 == on ]] && echo "stays loaded when idle" || echo "unloads when idle"). Backend restarted." ;;
   status)
     if info=$(launchctl print "gui/$UID/$LABEL" 2>/dev/null); then
       state=$(print -r -- "$info" | awk -F' = ' '/^\tstate =/{print $2; exit}')
@@ -110,5 +119,5 @@ with os.fdopen(fd, "w") as f:
 print("FreeFlow API Base URL ->", url)
 EOF
     open -a FreeFlow ;;
-  *) sed -n '2,13p' "$0"; exit 1 ;;
+  *) sed -n '2,14p' "$0"; exit 1 ;;
 esac

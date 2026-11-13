@@ -109,6 +109,9 @@ LLM_REQUEST_MODEL = "default_model" if LLM_ADAPTER else LLM_SOURCE
 LLM_PROMPT = os.environ.get("LLM_PROMPT", "freeflow")  # "compact": swap FreeFlow's default prompt for the trained one
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
+# Keep the speech model loaded when idle (only the cleanup LLM unloads). It is small, and a cold Neural Engine
+# load is sometimes 15 s instead of 0.2 s when Core ML has to recompile it.
+KEEP_ASR_LOADED = os.environ.get("KEEP_ASR_LOADED", "0") == "1"
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
 STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm after transcription
 SCREEN_WORDS = os.environ.get("SCREEN_WORDS", "1") != "0"  # use words read from FreeFlow's context screenshot
@@ -492,6 +495,11 @@ def _wake() -> None:
         asyncio.create_task(_ensure_llm())
 
 
+def _should_unload_asr() -> bool:
+    """On idle: unload the speech model only if it is loaded and KEEP_ASR_LOADED is off."""
+    return not KEEP_ASR_LOADED and (_asr is not None or _ane is not None)
+
+
 async def _idle_watch() -> None:
     while True:
         await asyncio.sleep(15)
@@ -499,11 +507,13 @@ async def _idle_watch() -> None:
             continue
         if time.monotonic() - _last_activity < IDLE_UNLOAD_SECONDS:
             continue
-        if _llm is not None or _asr is not None or _ane is not None:
-            log(f"idle for {IDLE_UNLOAD_SECONDS:.0f}s: unloading")
+        unload_asr = _should_unload_asr()
+        if _llm is not None or unload_asr:
+            log(f"idle for {IDLE_UNLOAD_SECONDS:.0f}s: unloading" + ("" if unload_asr else " (speech model kept loaded)"))
             async with _llm_lock:
                 _stop_llm()
-            await asyncio.get_running_loop().run_in_executor(_mlx, _unload_asr)
+            if unload_asr:
+                await asyncio.get_running_loop().run_in_executor(_mlx, _unload_asr)
             await asyncio.get_running_loop().run_in_executor(_ocr_pool, _close_ocr)
 
 
@@ -513,7 +523,10 @@ async def lifespan(_app):
     watcher = asyncio.create_task(_idle_watch())
     if IDLE_UNLOAD_SECONDS <= 0:  # always-warm mode: load everything now
         _wake()
-    log(f"ready (idle unload after {IDLE_UNLOAD_SECONDS:.0f}s; 0 = never)")
+    elif KEEP_ASR_LOADED:  # load the speech model now; the cleanup LLM still loads on demand
+        asyncio.get_running_loop().run_in_executor(_mlx, _load_asr)
+    log(f"ready (idle unload after {IDLE_UNLOAD_SECONDS:.0f}s; 0 = never"
+        + ("; speech model always loaded)" if KEEP_ASR_LOADED else ")"))
     yield
     watcher.cancel()
     _stop_llm()

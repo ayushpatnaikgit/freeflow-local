@@ -164,6 +164,7 @@ cd ~/Library/Application\ Support/FreeFlowLocal
 ./freeflowctl model e4b|e2b|<id>    # change the cleanup model
 ./freeflowctl ane on|off            # speech-to-text on the Neural Engine or the GPU
 ./freeflowctl screen-words on|off   # spell on-screen words (on by default)
+./freeflowctl asr-warm on|off       # keep the speech model loaded when idle (off by default)
 ./freeflowctl configure             # point FreeFlow at the backend again
 ./freeflowctl uninstall             # stop it and remove it from login
 ```

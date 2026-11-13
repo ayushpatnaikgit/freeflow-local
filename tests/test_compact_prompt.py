@@ -61,5 +61,17 @@ class ServerPromptStyleTest(unittest.TestCase):
             self.assertEqual(server.adapter_path(d), d)
 
 
+class KeepAsrLoadedTest(unittest.TestCase):
+    def test_idle_unload_respects_keep_asr_loaded(self):
+        with mock.patch.object(server, "_asr", None), mock.patch.object(server, "_ane", object()):
+            with mock.patch.object(server, "KEEP_ASR_LOADED", False):
+                self.assertTrue(server._should_unload_asr())
+            with mock.patch.object(server, "KEEP_ASR_LOADED", True):
+                self.assertFalse(server._should_unload_asr())
+        with mock.patch.object(server, "_asr", None), mock.patch.object(server, "_ane", None), \
+                mock.patch.object(server, "KEEP_ASR_LOADED", False):
+            self.assertFalse(server._should_unload_asr())  # nothing loaded, nothing to unload
+
+
 if __name__ == "__main__":
     unittest.main()
