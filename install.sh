@@ -10,7 +10,7 @@ set -euo pipefail
 SRC="${0:A:h}"
 DEST="${FREEFLOW_LOCAL_DIR:-$HOME/Library/Application Support/FreeFlowLocal}"
 ASR_MODEL="itsreidar/orukeet-mlx"
-export LLM_MODEL="${LLM_MODEL:-mlx-community/gemma-4-e4b-it-4bit}"
+export LLM_MODEL="${LLM_MODEL:-ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit}"
 AUTOSTART=1
 CONFIGURE=1
 for arg in "$@"; do
@@ -24,7 +24,7 @@ done
 
 [[ "$(uname -m)" == arm64 ]] || { echo "This needs an Apple Silicon Mac (M1 or later); MLX does not run on Intel." >&2; exit 1; }
 mem_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-(( mem_gb >= 16 )) || echo "Warning: ${mem_gb} GB of RAM. The models use about 6.5 GB while you dictate; 16 GB or more is recommended."
+(( mem_gb >= 8 )) || echo "Warning: ${mem_gb} GB of RAM. The models use about 3 GB while you dictate; 8 GB or more is recommended."
 
 if ! command -v uv >/dev/null; then
   if command -v brew >/dev/null; then
@@ -39,8 +39,8 @@ fi
 echo "Installing to: $DEST"
 mkdir -p "$DEST/logs" "$DEST/ane" "$DEST/ocr" "$DEST/bin"
 rm -f "$DEST/parakeet_server.py"  # renamed to server.py in 0.1.0
-for f in server.py fast_tdt.py screen_words.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
-         ane/orukeet_ane.swift ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
+for f in server.py fast_tdt.py screen_words.py compact_prompt.py vocab_learner.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
+         ane/orukeet_ane.swift ane/JointDecisionv3Logits.mlmodel ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
 chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh" "$DEST/setup-ane.sh"
@@ -48,7 +48,7 @@ chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh" "$DES
 cd "$DEST"
 echo "Setting up Python environment..."
 uv sync --frozen --quiet --compile-bytecode
-echo "Downloading models (about 6 GB the first time; later runs skip this)..."
+echo "Downloading models (about 2 GB the first time; later runs skip this)..."
 for model in "$ASR_MODEL" "$LLM_MODEL"; do
   # The exact version from pinned-models.txt when the model is listed there; only show output if it fails.
   rev=$(awk -v m="$model" '$1 == m {print $2}' pinned-models.txt)
@@ -62,7 +62,9 @@ done
 # Swift helpers: a release (get.sh) ships them prebuilt in bin/; a git checkout builds them, which needs the
 # Xcode Command Line Tools. Without either, screen words and Neural Engine speech-to-text are unavailable.
 rm -f "$DEST/bin/screen-ocr"
-if [[ -x "$SRC/bin/screen-ocr" && -x "$SRC/bin/orukeet-ane" && ! "$SRC/ocr/screen_ocr.swift" -nt "$SRC/bin/screen-ocr" ]]; then
+# A prebuilt helper is used only if it is newer than its source (a stale one silently lacks newer features).
+if [[ -x "$SRC/bin/screen-ocr" && -x "$SRC/bin/orukeet-ane" && ! "$SRC/ocr/screen_ocr.swift" -nt "$SRC/bin/screen-ocr" \
+      && ! "$SRC/ane/orukeet_ane.swift" -nt "$SRC/bin/orukeet-ane" ]]; then
   cp "$SRC/bin/screen-ocr" "$SRC/bin/orukeet-ane" "$DEST/bin/"
 elif command -v swiftc >/dev/null; then
   echo "Building the screen-words helper..."
@@ -70,6 +72,19 @@ elif command -v swiftc >/dev/null; then
 else
   echo "Note: Xcode Command Line Tools not found (xcode-select --install), so screen words are off."
 fi
+
+# edit-watch (vocabulary learning, opt-in): macOS ties its Accessibility permission to the exact binary, so it is only
+# replaced when its source changes; otherwise every reinstall would silently revoke the permission.
+mkdir -p "$DEST/learn"
+if [[ -x "$SRC/bin/edit-watch" && ! "$SRC/learn/edit_watch.swift" -nt "$SRC/bin/edit-watch" ]]; then
+  cmp -s "$SRC/bin/edit-watch" "$DEST/bin/edit-watch" || cp "$SRC/bin/edit-watch" "$DEST/bin/edit-watch"
+elif ! cmp -s "$SRC/learn/edit_watch.swift" "$DEST/learn/edit_watch.swift" || [[ ! -x "$DEST/bin/edit-watch" ]]; then
+  if command -v swiftc >/dev/null; then
+    echo "Building the vocabulary-learning helper..."
+    swiftc -O -o "$DEST/bin/edit-watch" "$SRC/learn/edit_watch.swift" || rm -f "$DEST/bin/edit-watch"
+  fi
+fi
+cp "$SRC/learn/edit_watch.swift" "$DEST/learn/edit_watch.swift"
 if [[ -x "$DEST/bin/screen-ocr" ]] && ! "$DEST/bin/screen-ocr" --selftest >/dev/null; then
   rm -f "$DEST/bin/screen-ocr"
   echo "Warning: the screen-words helper failed its self-test; screen words are off." >&2

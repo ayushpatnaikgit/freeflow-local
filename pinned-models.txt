@@ -2,4 +2,6 @@
 # model gets updated; nothing changes silently upstream. Models not listed (freeflowctl model <id>) are not pinned.
 itsreidar/orukeet-mlx 17894066e1d148997bfc93a4d41c605ca1b0475d
 mlx-community/gemma-4-e4b-it-4bit 475b9088d29754a3379866cf5aeb6b41acd313c2
+ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit a8caa0c31afbfc4872c6ba272d9165720dfe28cf
 mlx-community/gemma-4-e2b-it-4bit 238767527555cb75a05732a84dff5d6ba0dd6809
+mlx-community/S1-mini-MLX-bf16 9b07a48e825f4c5b4a928bfa386b1a6ad0272420

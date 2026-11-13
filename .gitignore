@@ -4,3 +4,4 @@ logs/
 *.wav
 bin/
 dist/
+learned_vocabulary.json

@@ -27,6 +27,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -40,8 +41,10 @@ import numpy as np
 from fastapi import FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+import compact_prompt
 import fast_tdt
 import screen_words
+import vocab_learner
 
 HERE = Path(__file__).resolve().parent
 
@@ -61,7 +64,9 @@ ANE_BUNDLE = HERE / "coreml" / "orukeet-r3-coreml-greedy"
 ANE_CACHE = HERE / "coreml" / "compiled"
 ANE_HELPER = HERE / "bin" / "orukeet-ane"
 ASR_MODEL = os.environ.get("ASR_MODEL", "itsreidar/orukeet-mlx")
-LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-e4b-it-4bit")
+# Default cleanup model: S1-mini (Superwhisper) fine-tuned for FreeFlow's cleanup requests, MLX 6-bit (473 MB).
+DEFAULT_LLM_MODEL = "ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit"
+LLM_MODEL = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
 
 
 def read_pins(text: str) -> dict[str, str]:
@@ -88,15 +93,46 @@ def model_source(repo: str) -> str:
         return repo
 
 
+def adapter_path(setting: str) -> str | None:
+    """LLM_ADAPTER: a LoRA adapter folder (absolute, or relative to the install folder); None if unset or missing."""
+    if not setting:
+        return None
+    path = Path(setting).expanduser()
+    path = path if path.is_absolute() else HERE / path
+    if not (path / "adapters.safetensors").exists():
+        print(f"note: LLM_ADAPTER {setting} has no adapters.safetensors; serving the base model", flush=True)
+        return None
+    return str(path)
+
+
 ASR_SOURCE = model_source(ASR_MODEL)
 LLM_SOURCE = model_source(LLM_MODEL)
+LLM_ADAPTER = adapter_path(os.environ.get("LLM_ADAPTER", ""))
+# mlx_lm.server attaches --adapter-path only to "default_model"; naming the model loads a second copy WITHOUT it.
+LLM_REQUEST_MODEL = "default_model" if LLM_ADAPTER else LLM_SOURCE
+# "compact": swap FreeFlow's default prompt for the one the fine-tuned model was trained on; "freeflow": pass it through
+LLM_PROMPT = os.environ.get("LLM_PROMPT") or ("compact" if "S1-mini-FreeFlow" in LLM_MODEL else "freeflow")
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
+# Keep the speech model loaded when idle (only the cleanup LLM unloads). It is small, and a cold Neural Engine
+# load is sometimes 15 s instead of 0.2 s when Core ML has to recompile it.
+KEEP_ASR_LOADED = os.environ.get("KEEP_ASR_LOADED", "0") == "1"
 CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
 STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm after transcription
 SCREEN_WORDS = os.environ.get("SCREEN_WORDS", "1") != "0"  # use words read from FreeFlow's context screenshot
 OCR_HELPER = HERE / "bin" / "screen-ocr"
+EDIT_WATCH = HERE / "bin" / "edit-watch"
+# Learn vocabulary from the user's corrections of pasted text (needs Accessibility for bin/edit-watch). Off by default.
+VOCAB_LEARN = os.environ.get("VOCAB_LEARN", "0") == "1"
+LEARNED_FILE = HERE / "learned_vocabulary.json"
 SCREEN_WORDS_MAX_AGE = 300.0  # seconds from recording start (context request) to cleanup; older words are ignored
+# Vocabulary boosting in Orukeet (Neural Engine only): the user's FreeFlow vocabulary and this dictation's screen
+# words tip close calls in the recogniser toward those spellings. Only whole terms are accepted. Off by default.
+ASR_BOOST = os.environ.get("ASR_BOOST", "0") == "1"
+BOOST_MAX_TERMS = 100
+# Vocabulary terms that sound like part of the transcript are handed to cleanup like screen words. This catches a term
+# the recogniser split into several words ("or who keat"), which boosting can't fix.
+VOCAB_HINTS = os.environ.get("VOCAB_HINTS", "1") != "0"
 SCREEN_WORDS_WAIT = 0.5  # at cleanup, wait at most this long for OCR still running (it normally finished during speech)
 
 
@@ -121,18 +157,21 @@ class _AneHelper:
         if not ready.get("ready"):
             self.close()
             raise RuntimeError(ready.get("error", "orukeet-ane did not start"))
+        self.can_boost = bool(ready.get("boost"))  # older helpers read every line as a file path
         log(f"asr (Neural Engine) loaded in {time.perf_counter() - t:.2f}s")
 
-    def transcribe(self, path: str) -> str:
+    def transcribe(self, path: str, boost: list[str] | None = None) -> str:
         with wave.open(path, "rb") as w:
             ok = w.getnchannels() == 1 and w.getsampwidth() == 2 and w.getframerate() == 16000
         if not ok:
             raise ValueError("Neural Engine path needs 16 kHz mono 16-bit WAV")
-        self.proc.stdin.write(path + "\n")
+        self.proc.stdin.write(helper_request(path, boost if self.can_boost else None) + "\n")
         self.proc.stdin.flush()
         reply = json.loads(self.proc.stdout.readline() or '{"error": "helper exited"}')
         if "error" in reply:
             raise RuntimeError(reply["error"])
+        if boost and self.can_boost:
+            log(f"asr boost: {len(boost)} terms, {reply.get('boosted', 0)} swapped in")  # counts only
         return reply["text"]
 
     def close(self) -> None:
@@ -142,6 +181,34 @@ class _AneHelper:
                 self.proc.wait(5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+
+
+def helper_request(path: str, boost: list[str] | None) -> str:
+    """One stdin line for orukeet-ane: the bare path (today's protocol), or JSON with the terms to boost."""
+    return json.dumps({"path": path, "boost": boost}) if boost else path
+
+
+_VOCAB_MARKER = "Use these spellings exactly in the output when relevant:\n"
+
+
+def vocabulary_terms(system_prompt: str | None) -> list[str]:
+    """The user's FreeFlow vocabulary: FreeFlow appends it as the last line of the cleanup system prompt."""
+    if not system_prompt or _VOCAB_MARKER not in system_prompt:
+        return []
+    line = system_prompt.rsplit(_VOCAB_MARKER, 1)[1].split("\n", 1)[0]
+    return [t.strip() for t in line.split(",") if t.strip()]
+
+
+def boost_terms(vocabulary: list[str], screen: list[str]) -> list[str]:
+    """Vocabulary first, then screen words; one spelling per term, at least 3 letters or digits, capped."""
+    out, seen = [], set()
+    for term in vocabulary + screen:
+        key = term.lower()
+        if len(re.sub(r"[^a-z0-9]", "", key)) < 3 or key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+    return out[:BOOST_MAX_TERMS]
 
 
 _ane: _AneHelper | None = None
@@ -198,17 +265,18 @@ def _unload_asr() -> None:
         log("asr unloaded")
 
 
-def _transcribe(path: str) -> str:
+def _transcribe(path: str, boost: list[str] | None = None) -> str:
     global _ane, _ane_failed
     _load_asr()
     text = None
     if _ane is not None:
         try:
-            text = _ane.transcribe(path)
+            text = _ane.transcribe(path, boost)
         except ValueError:
             pass  # not 16 kHz mono WAV: MLX reads any format via ffmpeg
         except Exception as e:  # noqa: BLE001
-            log(f"Neural Engine ASR failed ({e}); using MLX from now on")
+            # error type only: helper messages can echo the request (file path, boost terms read from the screen)
+            log(f"Neural Engine ASR failed ({type(e).__name__}); using MLX from now on")
             _ane.close()
             _ane, _ane_failed = None, True
     if text is None:
@@ -330,6 +398,14 @@ def _start_screen_words(messages: list) -> None:
     _screen_task_at = time.monotonic()
 
 
+def _peek_screen_words() -> list[str]:
+    """This dictation's screen words if OCR has already finished; never waits, and leaves them for cleanup."""
+    task = _screen_task
+    if task is None or not task.done() or task.cancelled() or time.monotonic() - _screen_task_at > SCREEN_WORDS_MAX_AGE:
+        return []
+    return task.result() if task.exception() is None else []
+
+
 def _take_screen_task() -> asyncio.Future | None:
     """This dictation's screen-words task, if recent; each one is used for one cleanup only."""
     global _screen_task
@@ -339,23 +415,110 @@ def _take_screen_task() -> asyncio.Future | None:
     return task
 
 
-async def _with_screen_words(messages: list, task: asyncio.Future | None, transcript: str) -> None:
-    """Add the screen words that sound like part of the transcript to the cleanup request's user message (not the
-    system prompt, which stays cached). Most dictations match none, and then the request is unchanged."""
-    if task is None:
+async def _with_word_hints(messages: list, task: asyncio.Future | None, transcript: str,
+                           vocabulary: list[str]) -> None:
+    """Add the screen words and vocabulary terms that sound like part of the transcript ("or who keat" -> Orukeet)
+    to the cleanup request's user message (not the system prompt, which stays cached). They use the SCREEN_WORDS
+    section the fine-tuned model was trained on. Most dictations match none, and then the request is unchanged."""
+    words: list[str] = []
+    if task is not None:
+        try:
+            words = await asyncio.wait_for(asyncio.shield(task), SCREEN_WORDS_WAIT)
+        except asyncio.TimeoutError:
+            log("screen words not ready in time; cleaned up without them")
+    if not words and not vocabulary:
         return
-    try:
-        words = await asyncio.wait_for(asyncio.shield(task), SCREEN_WORDS_WAIT)
-    except asyncio.TimeoutError:
-        log("screen words not ready in time; cleaned up without them")
-        return
-    found = screen_words.relevant(words, transcript)
-    log(f"screen words: {len(found)} of {len(words)} match the transcript")  # counts only, never the words
+    found = screen_words.relevant(vocabulary + [w for w in words if w.lower() not in {v.lower() for v in vocabulary}],
+                                  transcript)
+    log(f"word hints: {len(found)} match the transcript "  # counts only, never the words
+        f"(of {len(words)} screen words, {len(vocabulary)} vocabulary terms)")
     section = screen_words.prompt_section(found)
     content = messages[-1].get("content")
     marker = "RAW_TRANSCRIPTION:\n<<<RAW_TRANSCRIPTION"
     if section and isinstance(content, str) and content.count(marker) == 1:
         messages[-1]["content"] = content.replace(marker, section + "\n" + marker)
+
+
+# ---------------------------------------------------------------- vocabulary learning (opt-in)
+
+_learned = vocab_learner.LearnedVocabulary(LEARNED_FILE) if VOCAB_LEARN else None
+
+
+class _EditWatcher:
+    """bin/edit-watch: after each paste, reports how the pasted text reads once the user has edited it.
+    Pasted and edited text stay in memory; only learned terms are stored, and logs carry counts."""
+
+    def __init__(self) -> None:
+        self.proc = subprocess.Popen([str(EDIT_WATCH)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        ready = json.loads(self.proc.stdout.readline() or "{}")
+        if not ready.get("ready"):
+            raise RuntimeError("edit-watch did not start")
+        if not ready.get("trusted"):
+            log("vocabulary learning: edit-watch needs Accessibility permission (freeflowctl learn on)")
+        self.pending: list[tuple[str, list[str]]] = []  # one entry per watch, in order
+        self.lock = threading.Lock()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def watch(self, pasted: str, vocabulary: list[str]) -> None:
+        with self.lock:
+            self.pending.append((pasted, vocabulary))
+            self.proc.stdin.write(json.dumps({"watch": pasted, "seconds": 30}) + "\n")
+            self.proc.stdin.flush()
+
+    def stop(self) -> None:
+        with self.lock:
+            self.proc.stdin.write('{"stop": true}\n')
+            self.proc.stdin.flush()
+
+    def _read(self) -> None:
+        for line in self.proc.stdout:
+            try:
+                edited = json.loads(line).get("edited")
+            except ValueError:
+                continue
+            with self.lock:
+                pasted, vocabulary = self.pending.pop(0) if self.pending else ("", [])
+            if edited and pasted and _learned is not None:
+                n = _learned.learn(pasted, edited, vocabulary)
+                if n:
+                    log(f"vocabulary learning: {n} correction(s) learned")  # counts only
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+
+
+_watcher: _EditWatcher | None = None
+_watcher_failed = False
+
+
+def _edit_watcher() -> _EditWatcher | None:
+    global _watcher, _watcher_failed
+    if not VOCAB_LEARN or _watcher_failed or not EDIT_WATCH.exists():
+        return None
+    if _watcher is None or _watcher.proc.poll() is not None:
+        try:
+            _watcher = _EditWatcher()
+        except Exception as e:  # noqa: BLE001 - learning is optional
+            log(f"vocabulary learning unavailable ({type(e).__name__}); off until restart")
+            _watcher_failed = True
+            return None
+    return _watcher
+
+
+def learned_terms() -> list[str]:
+    return _learned.terms() if _learned is not None else []
+
+
+def pasted_text(data: bytes) -> str | None:
+    """What FreeFlow will paste from a cleanup reply (it trims and drops surrounding quotes; EMPTY pastes nothing)."""
+    try:
+        text = (json.loads(data)["choices"][0]["message"].get("content") or "").strip()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+    if len(text) > 1 and text.startswith('"') and text.endswith('"'):
+        text = text[1:-1].strip()
+    return None if not text or text == "EMPTY" else text
 
 
 # ---------------------------------------------------------------- LLM (child process)
@@ -399,12 +562,13 @@ async def _ensure_llm() -> None:
         t = time.perf_counter()
         _llm_port = LLM_PORT or _free_port()
         logf = open(HERE / "logs" / "llm.log", "ab")
-        _llm = subprocess.Popen(
-            [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_SOURCE,
-             "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
-             "--chat-template-args", '{"enable_thinking":false}',
-             "--allowed-origins", "none"],  # no web page may call the model server (default would be "*")
-            stdout=logf, stderr=subprocess.STDOUT, cwd=HERE)
+        cmd = [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_SOURCE,
+               "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
+               "--chat-template-args", '{"enable_thinking":false}',
+               "--allowed-origins", "none"]  # no web page may call the model server (default would be "*")
+        if LLM_ADAPTER:
+            cmd += ["--adapter-path", LLM_ADAPTER]
+        _llm = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, cwd=HERE)
         while True:
             if not _llm_alive():
                 log(f"llm failed to start on port {_llm_port}; see logs/llm.log")
@@ -425,7 +589,7 @@ async def _prefill() -> None:
     t = time.perf_counter()
     system = _cleanup_system_prompt or "You clean up dictated text."
     status, _, _ = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", {
-        "model": LLM_SOURCE, "temperature": 0, "max_tokens": 1,
+        "model": LLM_REQUEST_MODEL, "temperature": 0, "max_tokens": 1,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": "Instructions: Clean up RAW_TRANSCRIPTION."}]})
     log(f"llm weights + prompt cache warm in {time.perf_counter() - t:.1f}s"
@@ -474,6 +638,11 @@ def _wake() -> None:
         asyncio.create_task(_ensure_llm())
 
 
+def _should_unload_asr() -> bool:
+    """On idle: unload the speech model only if it is loaded and KEEP_ASR_LOADED is off."""
+    return not KEEP_ASR_LOADED and (_asr is not None or _ane is not None)
+
+
 async def _idle_watch() -> None:
     while True:
         await asyncio.sleep(15)
@@ -481,11 +650,13 @@ async def _idle_watch() -> None:
             continue
         if time.monotonic() - _last_activity < IDLE_UNLOAD_SECONDS:
             continue
-        if _llm is not None or _asr is not None or _ane is not None:
-            log(f"idle for {IDLE_UNLOAD_SECONDS:.0f}s: unloading")
+        unload_asr = _should_unload_asr()
+        if _llm is not None or unload_asr:
+            log(f"idle for {IDLE_UNLOAD_SECONDS:.0f}s: unloading" + ("" if unload_asr else " (speech model kept loaded)"))
             async with _llm_lock:
                 _stop_llm()
-            await asyncio.get_running_loop().run_in_executor(_mlx, _unload_asr)
+            if unload_asr:
+                await asyncio.get_running_loop().run_in_executor(_mlx, _unload_asr)
             await asyncio.get_running_loop().run_in_executor(_ocr_pool, _close_ocr)
 
 
@@ -495,11 +666,16 @@ async def lifespan(_app):
     watcher = asyncio.create_task(_idle_watch())
     if IDLE_UNLOAD_SECONDS <= 0:  # always-warm mode: load everything now
         _wake()
-    log(f"ready (idle unload after {IDLE_UNLOAD_SECONDS:.0f}s; 0 = never)")
+    elif KEEP_ASR_LOADED:  # load the speech model now; the cleanup LLM still loads on demand
+        asyncio.get_running_loop().run_in_executor(_mlx, _load_asr)
+    log(f"ready (idle unload after {IDLE_UNLOAD_SECONDS:.0f}s; 0 = never"
+        + ("; speech model always loaded)" if KEEP_ASR_LOADED else ")"))
     yield
     watcher.cancel()
     _stop_llm()
     _close_ocr()
+    if _watcher is not None:
+        _watcher.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -532,6 +708,8 @@ async def health():
             "asr_backend": "ane" if _ane is not None else ("mlx" if _asr is not None else ASR_BACKEND),
             "llm_running": _llm_alive(),
             "screen_words": SCREEN_WORDS and not _ocr_failed and OCR_HELPER.exists(),
+            "asr_boost": ASR_BOOST,
+            "vocab_learn": VOCAB_LEARN, "learned_terms": len(learned_terms()),
             "idle_seconds": round(time.monotonic() - _last_activity),
             "idle_unload_after": IDLE_UNLOAD_SECONDS, "asr_model": ASR_MODEL, "llm_model": LLM_MODEL}
 
@@ -543,7 +721,7 @@ async def chat_completions(request: Request):
     async with _Activity():
         _wake()  # recording just started (context request) or cleanup is due
         payload = await request.json()
-        payload["model"] = LLM_SOURCE
+        payload["model"] = LLM_REQUEST_MODEL
         payload["stream"] = False
         for hosted_only in ("reasoning_effort", "include_reasoning"):  # Groq/OpenAI options
             payload.pop(hosted_only, None)
@@ -557,19 +735,69 @@ async def chat_completions(request: Request):
         raw = None
         if (len(messages) >= 2 and messages[0].get("role") == "system"
                 and "RAW_TRANSCRIPTION" in str(messages[-1].get("content", ""))):
+            _use_prompt_style(messages)
             _cleanup_system_prompt = messages[0]["content"]
             m = _RAW_BLOCK.search(str(messages[-1].get("content", "")))
             raw = m.group(1).strip() if m else None
         screen_task = _take_screen_task() if raw is not None else None
         await _ensure_llm()
-        await _with_screen_words(messages, screen_task, raw or "")
+        watcher = _edit_watcher()
+        if raw is not None:
+            vocabulary = vocabulary_terms(messages[0]["content"]) + learned_terms() if VOCAB_HINTS else []
+            await _with_word_hints(messages, screen_task, raw, vocabulary)
+        elif watcher is not None:
+            watcher.stop()  # a new recording: finish watching the previous paste before this one lands
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
-            data = _keep_spoken_words(data, raw)
+            data = _guard_output(_keep_spoken_words(data, raw), raw)
+            pasted = pasted_text(data)
+            if watcher is not None and pasted:
+                watcher.watch(pasted, vocabulary_terms(messages[0]["content"]))
         return Response(content=data, status_code=status, media_type=ctype)
 
 
 _RAW_BLOCK = re.compile(r"<<<RAW_TRANSCRIPTION\n(.*?)\nRAW_TRANSCRIPTION", re.S)
+_prompt_note_logged = False
+
+
+def _use_prompt_style(messages: list) -> None:
+    """With LLM_PROMPT=compact, give the fine-tuned model the prompt it was trained on (vocabulary etc. kept)."""
+    global _prompt_note_logged
+    if LLM_PROMPT != "compact" or not isinstance(messages[0].get("content"), str):
+        return
+    compact = compact_prompt.compact_system_prompt(messages[0]["content"])
+    if compact is not None:
+        messages[0]["content"] = compact
+    if not _prompt_note_logged:  # once per run; says which path, never the prompt itself
+        log("cleanup prompt: compact" if compact is not None else "cleanup prompt: custom, passed through unchanged")
+        _prompt_note_logged = True
+
+
+def expanded_too_much(raw: str, cleaned: str) -> tuple[bool, bool]:
+    """(warn, revert) for a cleanup that came back much longer than what was said. Cleanup only removes or reformats
+    words, so a long answer to a 1-3 word transcript ("Hmm." -> a whole sentence) is invented: keep the transcript."""
+    n_raw, n_out = len(re.findall(r"\w+", raw)), len(re.findall(r"\w+", cleaned))
+    warn = n_out >= n_raw + 5 and n_out > 1.5 * n_raw
+    return warn, warn and n_raw <= 3
+
+
+def _guard_output(data: bytes, raw: str) -> bytes:
+    """Log (counts only) when cleanup adds many words; for a 1-3 word transcript, return the transcript instead."""
+    try:
+        body = json.loads(data)
+        message = body["choices"][0]["message"]
+        warn, revert = expanded_too_much(raw, message.get("content") or "")
+        if not warn:
+            return data
+        n_raw, n_out = len(re.findall(r"\w+", raw)), len(re.findall(r"\w+", message.get("content") or ""))
+        if not revert:
+            log(f"cleanup added words: {n_raw}-word transcript -> {n_out} words")
+            return data
+        log(f"cleanup turned a {n_raw}-word transcript into {n_out} words; kept the transcript")
+        message["content"] = raw
+        return json.dumps(body).encode()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return data
 
 
 def _keep_spoken_words(data: bytes, raw: str) -> bytes:
@@ -604,8 +832,14 @@ async def transcriptions(
             path = tmp.name
         try:
             t = time.perf_counter()
-            text = await asyncio.get_running_loop().run_in_executor(_mlx, _transcribe, path)
+            boost = (boost_terms(vocabulary_terms(_cleanup_system_prompt) + learned_terms(), _peek_screen_words())
+                     if ASR_BOOST else None)
+            text = await asyncio.get_running_loop().run_in_executor(_mlx, _transcribe, path, boost)
             log(f"asr {(time.perf_counter() - t) * 1000:.0f}ms chars={len(text)}")
+            if _learned is not None:
+                text, n = vocab_learner.apply_aliases(text, _learned.aliases())
+                if n:
+                    log(f"vocabulary learning: {n} learned alias(es) applied")  # counts only
         finally:
             os.unlink(path)
 

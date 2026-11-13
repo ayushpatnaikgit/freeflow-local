@@ -75,6 +75,19 @@ class ScreenWordsTest(unittest.TestCase):
         self.assertEqual(screen_words.relevant(["Nadia"], "Nadya, can you review this?"), ["Nadia"])
         self.assertEqual(screen_words.relevant(["LoRA"], "Train a Laura adapter."), ["LoRA"])
 
+    def test_number_hyphen_terms_are_read_whole(self):
+        # "8-bit" used to be read as "bit" (a dictionary word) and dropped, so "eighth bit" was never corrected.
+        words = screen_words.screen_words(["Neural Engine 8-bit and 6-bit builds"] * 2)
+        self.assertIn("8-bit", words)
+        self.assertIn("6-bit", words)
+        self.assertEqual(screen_words.relevant(words, "Why are we even doing the eighth bit?"), ["8-bit"])
+
+    def test_opening_vowel_and_wh_are_loose(self):
+        # recognisers swap opening vowels and spell "u" as "who": both still match the listed term
+        self.assertEqual(screen_words.relevant(["Orukeet"], "We should use Aurokeet for speech."), ["Orukeet"])
+        self.assertEqual(screen_words.relevant(["Orukeet"], "We should use or who keat for speech."), ["Orukeet"])
+        self.assertEqual(screen_words.relevant(["Orukeet"], "Who is going to the meeting?"), [])
+
     def test_prompt_section(self):
         self.assertEqual(screen_words.prompt_section([]), "")
         section = screen_words.prompt_section(["LoRA", "MLX"])

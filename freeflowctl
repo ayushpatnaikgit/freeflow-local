@@ -8,8 +8,16 @@
 #   freeflowctl logs        follow the logs
 #   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
 #   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
-#   freeflowctl model e4b|e2b|<hf id>   cleanup model: Gemma 4 E4B (default, better) or E2B (faster, smaller)
+#   freeflowctl model s1|e4b|e2b|<hf id>  cleanup model: S1-mini fine-tuned for FreeFlow (default, fastest),
+#                                        Gemma 4 E4B (for custom prompts or edit mode) or E2B
+#   freeflowctl model s1 <dir>          S1-mini fine-tuned locally, as an adapter or merged model folder
 #   freeflowctl screen-words on|off      spell on-screen names and terms right, using FreeFlow's context screenshot
+#   freeflowctl asr-warm on|off          keep the speech model loaded when idle (only the cleanup LLM unloads)
+#   freeflowctl boost on|off             experimental: steer the Neural Engine recogniser toward your vocabulary
+#                                        and on-screen terms (whole terms only)
+#   freeflowctl learn on|off             learn names and terms from your corrections of pasted text (asks for
+#                                        Accessibility permission for bin/edit-watch)
+#   freeflowctl vocab list|forget <term>|clear   what has been learned
 set -euo pipefail
 D="${0:A:h}"
 URL="http://127.0.0.1:8081/v1"
@@ -32,18 +40,34 @@ case "${1:-status}" in
     echo "Restarted. Models load on the next dictation." ;;
   logs) tail -n 20 -f "$D/logs/server.log" "$D/logs/llm.log" ;;
   model)
+    adapter=""
     case "${2:-}" in
       e4b) id=mlx-community/gemma-4-e4b-it-4bit ;;
       e2b) id=mlx-community/gemma-4-e2b-it-4bit ;;
+      s1)  # experimental, not shipped in releases: S1-mini fine-tuned locally, as a LoRA adapter folder
+           # (adapters.safetensors) or as a merged, possibly quantized, model folder (config.json)
+        dir="${3:-}"; [[ -n "$dir" && -d "$D/$dir" ]] && dir="$D/$dir"
+        if [[ -z "$dir" ]]; then
+          id=ayushpatnaik/S1-mini-FreeFlow-cleanup-MLX-6bit; tuned=1
+        elif [[ -f "$dir/adapters.safetensors" ]]; then
+          id=mlx-community/S1-mini-MLX-bf16; adapter="${3:-adapters/s1-mini}"
+        elif [[ -f "$dir/config.json" ]]; then
+          id="${dir:A}"; merged=1
+        else
+          echo "No adapter or model at $dir (needs adapters.safetensors, or a model's config.json)" >&2; exit 1
+        fi ;;
       */*) id=$2 ;;
-      *) echo "usage: freeflowctl model e4b|e2b|<huggingface id>" >&2; exit 1 ;;
+      *) echo "usage: freeflowctl model s1 [dir]|e4b|e2b|<huggingface id>" >&2; exit 1 ;;
     esac
     rev=$(awk -v m="$id" '$1 == m {print $2}' "$D/pinned-models.txt" 2>/dev/null)
     pin=(); [[ -n "$rev" ]] && pin=(--revision "$rev")
-    (cd "$D" && out=$(uv run --frozen hf download "$id" "${pin[@]}" --quiet 2>&1)) || { echo "Download failed for $id" >&2; exit 1; }
+    [[ -n "${merged:-}" ]] || (cd "$D" && out=$(uv run --frozen hf download "$id" "${pin[@]}" --quiet 2>&1)) \
+      || { echo "Download failed for $id" >&2; exit 1; }
     set_setting LLM_MODEL "$id"
+    set_setting LLM_ADAPTER "$adapter"
+    set_setting LLM_PROMPT "$([[ -n "$adapter" || -n "${merged:-}" || -n "${tuned:-}" ]] && echo compact || echo freeflow)"
     launchctl kickstart -k "gui/$UID/$LABEL"
-    echo "Cleanup model: $id. Backend restarted." ;;
+    echo "Cleanup model: $id${adapter:+ + adapter $adapter}. Backend restarted." ;;
   ane)
     case "${2:-}" in
       on)  "$D/setup-ane.sh" && set_setting ASR_BACKEND ane ;;
@@ -60,6 +84,68 @@ case "${1:-status}" in
     esac
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Screen words: $2. Backend restarted." ;;
+  learn)
+    case "${2:-}" in
+      on)
+        [[ -x "$D/bin/edit-watch" ]] || { echo "bin/edit-watch is missing (reinstall with Xcode Command Line Tools)" >&2; exit 1; }
+        if [[ "$("$D/bin/edit-watch" --request-permission)" != "already allowed" ]]; then
+          echo "macOS will ask to allow \"edit-watch\" in Privacy & Security > Accessibility. Allow it, then run this again."
+        fi
+        set_setting VOCAB_LEARN 1 ;;
+      off) set_setting VOCAB_LEARN 0 ;;
+      *) echo "usage: freeflowctl learn on|off" >&2; exit 1 ;;
+    esac
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Vocabulary learning: $2. Backend restarted." ;;
+  vocab)
+    FILE="$D/learned_vocabulary.json"
+    case "${2:-list}" in
+      list) /usr/bin/python3 - "$FILE" <<'PY'
+import json, os, sys
+if not os.path.exists(sys.argv[1]):
+    sys.exit(print("Nothing learned yet."))
+terms = json.load(open(sys.argv[1])).get("terms", {})
+for term, e in sorted(terms.items(), key=lambda x: -x[1]["count"]):
+    heard = ", ".join(f"{h} ({n})" for h, n in e["heard"].items())
+    print(f"{term:28} corrected {e['count']}x" + (f"   heard as: {heard}" if heard else "")
+          + ("   (also in FreeFlow's vocabulary)" if e.get("in_vocabulary") else ""))
+print(f"{len(terms)} learned")
+PY
+        ;;
+      forget|clear)
+        [[ "$2" == clear || -n "${3:-}" ]] || { echo "usage: freeflowctl vocab forget <term>" >&2; exit 1; }
+        [[ -f "$FILE" ]] || { echo "Nothing learned yet."; exit 0; }
+        /usr/bin/python3 - "$FILE" "$2" "${3:-}" <<'PY'
+import json, os, sys
+path, action, term = sys.argv[1:4]
+data = json.load(open(path))
+before = len(data["terms"])
+data["terms"] = {} if action == "clear" else {k: v for k, v in data["terms"].items() if k.lower() != term.lower()}
+fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(data, f, ensure_ascii=False, indent=1)
+os.replace(path + ".tmp", path)
+print(f"Removed {before - len(data['terms'])}.")
+PY
+        launchctl kickstart -k "gui/$UID/$LABEL" ;;
+      *) echo "usage: freeflowctl vocab list|forget <term>|clear" >&2; exit 1 ;;
+    esac ;;
+  boost)
+    case "${2:-}" in
+      on)  set_setting ASR_BOOST 1 ;;
+      off) set_setting ASR_BOOST 0 ;;
+      *) echo "usage: freeflowctl boost on|off" >&2; exit 1 ;;
+    esac
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Vocabulary boosting: $2 (Neural Engine speech-to-text only). Backend restarted." ;;
+  asr-warm)
+    case "${2:-}" in
+      on)  set_setting KEEP_ASR_LOADED 1 ;;
+      off) set_setting KEEP_ASR_LOADED 0 ;;
+      *) echo "usage: freeflowctl asr-warm on|off" >&2; exit 1 ;;
+    esac
+    launchctl kickstart -k "gui/$UID/$LABEL"
+    echo "Speech model $([[ $2 == on ]] && echo "stays loaded when idle" || echo "unloads when idle"). Backend restarted." ;;
   status)
     if info=$(launchctl print "gui/$UID/$LABEL" 2>/dev/null); then
       state=$(print -r -- "$info" | awk -F' = ' '/^\tstate =/{print $2; exit}')
@@ -82,6 +168,11 @@ model = h.get("llm_model", "").split("/")[-1]
 print("cleanup LLM: ", f"loaded ({model})" if h.get("llm_running") else f"unloaded ({model})")
 if "screen_words" in h:
     print("screen words:", "on (needs Screen Recording for FreeFlow)" if h["screen_words"] else "off")
+if h.get("asr_boost"):
+    print("boosting:     on (vocabulary + screen words steer the recogniser)")
+if h.get("vocab_learn"):
+    n = h.get("learned_terms", 0)
+    print(f"learning:     on ({n} learned terms; freeflowctl vocab list)")
 secs = h.get("idle_seconds", "?")
 print(f"idle for {secs}s; unloads after", f"{idle:.0f}s" if idle > 0 else "never (always warm)")' || true
     [[ -f "$SETTINGS" ]] && /usr/bin/python3 -c 'import json,sys; print("FreeFlow API Base URL:", json.load(open(sys.argv[1])).get("api_base_url", "(default: Groq)"))' "$SETTINGS" ;;
@@ -102,5 +193,5 @@ with os.fdopen(fd, "w") as f:
 print("FreeFlow API Base URL ->", url)
 EOF
     open -a FreeFlow ;;
-  *) sed -n '2,12p' "$0"; exit 1 ;;
+  *) sed -n '2,20p' "$0"; exit 1 ;;
 esac
