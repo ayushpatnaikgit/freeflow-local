@@ -16,19 +16,23 @@ COMPACT_PROMPT = """You are FreeFlow's dictation cleanup. Rewrite RAW_TRANSCRIPT
 - Keep the transcript's language; preserve mixed-language text as mixed."""
 
 FREEFLOW_PROMPT_START = "You are a literal dictation cleanup layer"
-FREEFLOW_PROMPT_END_MARKER = "A standalone reply such as"  # last rule of FreeFlow's default prompt (2026-10-10)
+# The closing rule of FreeFlow's default prompt differs by version: the released 1.3.1 app ends with the EMPTY rule;
+# FreeFlow source from 2026-10-10 adds the "standalone reply" rule after it. Either identifies the default prompt.
+FREEFLOW_PROMPT_END_MARKERS = ("A standalone reply such as",
+                               "If the transcript is empty or only filler, return exactly: EMPTY")
+# What FreeFlow appends after its default prompt, each after a blank line: language instructions and vocabulary.
+FREEFLOW_APPENDIX_STARTS = ("\n\nIMPORTANT: ", "\n\nThe following vocabulary must be treated as high-priority terms")
 
 
 def compact_system_prompt(freeflow_system_prompt: str) -> str | None:
     """COMPACT_PROMPT plus whatever FreeFlow appended to its default prompt; None if it isn't FreeFlow's default."""
     if not freeflow_system_prompt.startswith(FREEFLOW_PROMPT_START):
         return None
-    end = freeflow_system_prompt.find(FREEFLOW_PROMPT_END_MARKER)
-    if end < 0:
+    starts = [i for i in (freeflow_system_prompt.find(m) for m in FREEFLOW_APPENDIX_STARTS) if i >= 0]
+    cut = min(starts, default=len(freeflow_system_prompt))
+    if not any(m in freeflow_system_prompt[:cut] for m in FREEFLOW_PROMPT_END_MARKERS):
         return None
-    end = freeflow_system_prompt.find("\n", end)
-    tail = "" if end < 0 else freeflow_system_prompt[end:]
-    return COMPACT_PROMPT + tail
+    return COMPACT_PROMPT + freeflow_system_prompt[cut:]
 
 
 def vocabulary_block(terms: list[str]) -> str:

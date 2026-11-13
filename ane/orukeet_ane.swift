@@ -322,7 +322,8 @@ do {
     emit(["error": "load failed: \(error)"])
     exit(1)
 }
-emit(["ready": true, "load_ms": Int(Date().timeIntervalSince(started) * 1000)])
+// "boost": this helper understands JSON request lines and can boost (the server checks before sending terms).
+emit(["ready": true, "load_ms": Int(Date().timeIntervalSince(started) * 1000), "boost": model.canBoost])
 if args.contains("--warmup") { exit(0) }
 
 // Each stdin line is a WAV path, or a JSON object {"path": ..., "boost": [terms], "beta": ..., ...}.

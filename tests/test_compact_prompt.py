@@ -30,6 +30,15 @@ class CompactPromptTest(unittest.TestCase):
     def test_default_prompt_without_additions(self):
         self.assertEqual(compact_prompt.compact_system_prompt(FREEFLOW_DEFAULT), compact_prompt.COMPACT_PROMPT)
 
+    def test_released_app_prompt_is_recognised(self):
+        # FreeFlow 1.3.1 (the released app) ends its default prompt with the EMPTY rule, without the newer
+        # "standalone reply" rule. Missing this sent the fine-tuned model FreeFlow's long prompt instead.
+        released = "You are a literal dictation cleanup layer. Rule one.\n- If the transcript is empty or only filler, return exactly: EMPTY"
+        language = "\n\nIMPORTANT: Translate the final cleaned text into German. Output ONLY in German."
+        out = compact_prompt.compact_system_prompt(released + language + VOCAB_TAIL)
+        self.assertEqual(out, compact_prompt.COMPACT_PROMPT + language + VOCAB_TAIL)
+        self.assertEqual(compact_prompt.compact_system_prompt(released), compact_prompt.COMPACT_PROMPT)
+
     def test_custom_prompt_is_not_recognised(self):
         self.assertIsNone(compact_prompt.compact_system_prompt("Clean this up like a pirate."))
         self.assertIsNone(compact_prompt.compact_system_prompt("You are a literal dictation cleanup layer. Short."))

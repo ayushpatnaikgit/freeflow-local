@@ -145,6 +145,7 @@ class _AneHelper:
         if not ready.get("ready"):
             self.close()
             raise RuntimeError(ready.get("error", "orukeet-ane did not start"))
+        self.can_boost = bool(ready.get("boost"))  # older helpers read every line as a file path
         log(f"asr (Neural Engine) loaded in {time.perf_counter() - t:.2f}s")
 
     def transcribe(self, path: str, boost: list[str] | None = None) -> str:
@@ -152,12 +153,12 @@ class _AneHelper:
             ok = w.getnchannels() == 1 and w.getsampwidth() == 2 and w.getframerate() == 16000
         if not ok:
             raise ValueError("Neural Engine path needs 16 kHz mono 16-bit WAV")
-        self.proc.stdin.write(helper_request(path, boost) + "\n")
+        self.proc.stdin.write(helper_request(path, boost if self.can_boost else None) + "\n")
         self.proc.stdin.flush()
         reply = json.loads(self.proc.stdout.readline() or '{"error": "helper exited"}')
         if "error" in reply:
             raise RuntimeError(reply["error"])
-        if boost:
+        if boost and self.can_boost:
             log(f"asr boost: {len(boost)} terms, {reply.get('boosted', 0)} swapped in")  # counts only
         return reply["text"]
 
@@ -262,7 +263,8 @@ def _transcribe(path: str, boost: list[str] | None = None) -> str:
         except ValueError:
             pass  # not 16 kHz mono WAV: MLX reads any format via ffmpeg
         except Exception as e:  # noqa: BLE001
-            log(f"Neural Engine ASR failed ({e}); using MLX from now on")
+            # error type only: helper messages can echo the request (file path, boost terms read from the screen)
+            log(f"Neural Engine ASR failed ({type(e).__name__}); using MLX from now on")
             _ane.close()
             _ane, _ane_failed = None, True
     if text is None:

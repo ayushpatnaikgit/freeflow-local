@@ -62,7 +62,9 @@ done
 # Swift helpers: a release (get.sh) ships them prebuilt in bin/; a git checkout builds them, which needs the
 # Xcode Command Line Tools. Without either, screen words and Neural Engine speech-to-text are unavailable.
 rm -f "$DEST/bin/screen-ocr"
-if [[ -x "$SRC/bin/screen-ocr" && -x "$SRC/bin/orukeet-ane" && ! "$SRC/ocr/screen_ocr.swift" -nt "$SRC/bin/screen-ocr" ]]; then
+# A prebuilt helper is used only if it is newer than its source (a stale one silently lacks newer features).
+if [[ -x "$SRC/bin/screen-ocr" && -x "$SRC/bin/orukeet-ane" && ! "$SRC/ocr/screen_ocr.swift" -nt "$SRC/bin/screen-ocr" \
+      && ! "$SRC/ane/orukeet_ane.swift" -nt "$SRC/bin/orukeet-ane" ]]; then
   cp "$SRC/bin/screen-ocr" "$SRC/bin/orukeet-ane" "$DEST/bin/"
 elif command -v swiftc >/dev/null; then
   echo "Building the screen-words helper..."

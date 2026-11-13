@@ -54,6 +54,32 @@ class HelperRequestTest(unittest.TestCase):
         self.assertNotIn("\n", line)
 
 
+class HelperCapabilityTest(unittest.TestCase):
+    def helper(self, can_boost: bool):
+        import io
+        import tempfile
+        import wave
+        h = object.__new__(server._AneHelper)
+        h.can_boost = can_boost
+        h.proc = mock.Mock(stdin=io.StringIO(), stdout=io.StringIO('{"text": "ok", "boosted": 0}\n'))
+        wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        with wave.open(wav.name, "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000), w.writeframes(b"\0\0" * 160)
+        return h, wav.name
+
+    def test_older_helper_never_gets_a_term_list(self):
+        # an older helper reads every line as a file path; sending it JSON broke speech-to-text and its error
+        # message echoed the request (screen words) into the log
+        h, path = self.helper(can_boost=False)
+        h.transcribe(path, ["Zentrix"])
+        self.assertEqual(h.proc.stdin.getvalue(), path + "\n")
+
+    def test_boosting_helper_gets_json(self):
+        h, path = self.helper(can_boost=True)
+        h.transcribe(path, ["Zentrix"])
+        self.assertEqual(json.loads(h.proc.stdin.getvalue()), {"path": path, "boost": ["Zentrix"]})
+
+
 class PeekScreenWordsTest(unittest.TestCase):
     def test_uses_finished_task_without_consuming_it(self):
         async def run():
