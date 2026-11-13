@@ -25,6 +25,9 @@ URL="http://127.0.0.1:8081/v1"
 APP_NAMES=(FreeFlow TellWell)
 app_settings() { echo "$HOME/Library/Application Support/$1/.settings"; }
 app_installed() { [[ -d "/Applications/$1.app" || -d "$HOME/Applications/$1.app" ]]; }
+app_path() {  # the installed copy; `open -a` could pick a stray build with the same name instead
+  if [[ -d "/Applications/$1.app" ]]; then print -r -- "/Applications/$1.app"; else print -r -- "$HOME/Applications/$1.app"; fi
+}
 LABEL=com.freeflow.local
 BACKEND_SETTINGS="$D/settings.env"
 
@@ -210,7 +213,7 @@ with os.fdopen(fd, "w") as f:
     json.dump(d, f)
 print(app, "API Base URL ->", url)
 EOF
-      app_installed $app && open -a $app
+      app_installed $app && open "$(app_path $app)"
     done ;;
   *) sed -n '2,20p' "$0"; exit 1 ;;
 esac
