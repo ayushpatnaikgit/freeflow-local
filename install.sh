@@ -39,7 +39,7 @@ fi
 echo "Installing to: $DEST"
 mkdir -p "$DEST/logs" "$DEST/ane" "$DEST/ocr" "$DEST/bin"
 rm -f "$DEST/parakeet_server.py"  # renamed to server.py in 0.1.0
-for f in server.py fast_tdt.py screen_words.py compact_prompt.py vocab_learner.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
+for f in server.py fast_tdt.py screen_words.py compact_prompt.py vocab_learner.py vocab_guard.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
          ane/orukeet_ane.swift ane/JointDecisionv3Logits.mlmodel ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
