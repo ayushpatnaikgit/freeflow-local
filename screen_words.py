@@ -21,9 +21,9 @@ MIN_READS = 2
 MATCH_THRESHOLD = 0.75
 MAX_SENT = 12
 
-# Words with letters, digits and inner - + ' (Qwen3, gpt-4o, C++, mlx-lm); edges trimmed below. Tokens with a dot
+# Words with letters, digits and inner - + ' (Qwen3, gpt-4o, C++, mlx-lm, 8-bit); edges trimmed below. Tokens with a dot
 # inside (install.sh, README.md, mlx_lm.lora) are file names or code, mostly sidebar noise, so they are dropped.
-_TOKEN = re.compile(r"[A-Za-z0-9_.]*[A-Za-z][A-Za-z0-9]*(?:[\-+'][A-Za-z0-9]+)*\+*[A-Za-z0-9_.]*")
+_TOKEN = re.compile(r"(?:\d+-)?[A-Za-z0-9_.]*[A-Za-z][A-Za-z0-9]*(?:[\-+'][A-Za-z0-9]+)*\+*[A-Za-z0-9_.]*")
 # UI chrome and technical noise that is unusual in form but useless as dictation vocabulary.
 _SKIP = {"ok", "id", "ui", "url", "urls", "http", "https", "www", "com", "md", "py", "sh", "js", "ts", "json", "html",
          "png", "jpg", "pdf", "txt", "app", "ctrl", "cmd", "esc", "tab", "pm", "am"}
@@ -104,7 +104,10 @@ def screen_words(lines: list[str], limit: int = MAX_WORDS, min_reads: int = MIN_
 
 
 _NUMBERS = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
-            "eight": "8", "nine": "9", "ten": "10"}
+            "eight": "8", "nine": "9", "ten": "10",
+            # ordinals: "8-bit" is often heard as "eighth bit"
+            "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5", "sixth": "6", "seventh": "7",
+            "eighth": "8", "ninth": "9", "tenth": "10"}
 _SOUNDS = (("ph", "f"), ("ck", "k"), ("qu", "k"), ("q", "k"), ("c", "k"), ("x", "ks"), ("z", "s"), ("w", "v"),
            ("dh", "d"), ("th", "t"), ("gh", "g"))
 
@@ -141,11 +144,15 @@ def relevant(words: list[str], transcript: str, threshold: float = MATCH_THRESHO
     tokens = [_NUMBERS.get(t.lower(), t) for t in re.findall(r"[A-Za-z0-9']+", transcript)]
     spans = [" ".join(tokens[i:i + n]) for n in (1, 2, 3) for i in range(len(tokens) - n + 1)]
     spoken = {_letters(t) for t in tokens}
+    spoken_digits = {d for t in tokens for d in re.findall(r"\d+", t)}
     known = _known()
     scored = []
     for word in words:
         w = _letters(word)
         if w in spoken:  # already spelled this way in the transcript: nothing to fix
+            continue
+        # A number in a screen word must have been said: "eighth bit" can be 8-bit, never 6-bit.
+        if any(d not in spoken_digits for d in re.findall(r"\d+", word)):
             continue
         best, span = max(((_similarity(word, span), span) for span in spans
                           if abs(len(_letters(span)) - len(w)) <= max(3, len(w) // 2)), default=(0.0, ""))
