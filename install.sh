@@ -99,21 +99,28 @@ if (( AUTOSTART )); then
   ./install-autostart.sh
 fi
 if (( CONFIGURE )); then
-  if [[ -d /Applications/FreeFlow.app || -d "$HOME/Applications/FreeFlow.app" ]]; then
+  # FREEFLOW_LOCAL_APP (set by get.sh --app) names the app just installed; otherwise configure each installed one.
+  if [[ -n "${FREEFLOW_LOCAL_APP:-}" ]]; then
+    ./freeflowctl configure "$FREEFLOW_LOCAL_APP"
+  elif [[ -d /Applications/FreeFlow.app || -d "$HOME/Applications/FreeFlow.app" \
+        || -d /Applications/TellWell.app || -d "$HOME/Applications/TellWell.app" ]]; then
     ./freeflowctl configure
   else
-    echo "FreeFlow isn't installed yet. Install it from https://github.com/zachlatta/freeflow, then run:"
+    echo "No dictation app found. Install TellWell (https://github.com/ayushpatnaikgit/tellwell) or FreeFlow"
+    echo "(https://github.com/zachlatta/freeflow), then run:"
     echo "  \"$DEST/freeflowctl\" configure"
   fi
 fi
 
+APP_NAME=FreeFlow
+[[ "${FREEFLOW_LOCAL_APP:-}" == tellwell ]] && APP_NAME=TellWell
 cat <<EOF
 
 Done. Next steps:
-  1. Open FreeFlow and finish its setup: allow Microphone and Accessibility.
+  1. Open $APP_NAME and finish its setup: allow Microphone and Accessibility.
      If it asks for an API key, type any text (e.g. "local"). Screen Recording is optional.
-  2. Hold your dictation key and speak. The first dictation after a break takes a few
-     seconds while the models load; after that it's about 1 second.
+  2. Hold your dictation key and speak. The first dictation after a break takes a second or two
+     while the models load; after that, cleaned text appears about 0.2-0.4 s after you stop.
 
 Check status any time:  "$DEST/freeflowctl" status
 EOF

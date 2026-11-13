@@ -6,7 +6,7 @@
 #   freeflowctl status      agent state, which models are loaded, idle time
 #   freeflowctl restart     restart the backend (models reload on the next dictation)
 #   freeflowctl logs        follow the logs
-#   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
+#   freeflowctl configure [freeflow|tellwell]   point the app (default: each installed one) at the local server
 #   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
 #   freeflowctl model s1|e4b|e2b|<hf id>  cleanup model: S1-mini fine-tuned for FreeFlow (default, fastest),
 #                                        Gemma 4 E4B (for custom prompts or edit mode) or E2B
@@ -21,7 +21,10 @@
 set -euo pipefail
 D="${0:A:h}"
 URL="http://127.0.0.1:8081/v1"
-SETTINGS="$HOME/Library/Application Support/FreeFlow/.settings"
+# The dictation apps this backend can serve: FreeFlow and TellWell (a FreeFlow fork). Each keeps its own settings.
+APP_NAMES=(FreeFlow TellWell)
+app_settings() { echo "$HOME/Library/Application Support/$1/.settings"; }
+app_installed() { [[ -d "/Applications/$1.app" || -d "$HOME/Applications/$1.app" ]]; }
 LABEL=com.freeflow.local
 BACKEND_SETTINGS="$D/settings.env"
 
@@ -175,23 +178,39 @@ if h.get("vocab_learn"):
     print(f"learning:     on ({n} learned terms; freeflowctl vocab list)")
 secs = h.get("idle_seconds", "?")
 print(f"idle for {secs}s; unloads after", f"{idle:.0f}s" if idle > 0 else "never (always warm)")' || true
-    [[ -f "$SETTINGS" ]] && /usr/bin/python3 -c 'import json,sys; print("FreeFlow API Base URL:", json.load(open(sys.argv[1])).get("api_base_url", "(default: Groq)"))' "$SETTINGS" ;;
-  configure)
-    osascript -e 'tell application "FreeFlow" to quit' 2>/dev/null || true
-    sleep 2
-    mkdir -p "${SETTINGS:h}"
-    /usr/bin/python3 - "$SETTINGS" "$URL" <<'EOF'
+    for app in $APP_NAMES; do
+      f=$(app_settings $app)
+      [[ -f "$f" ]] && /usr/bin/python3 -c 'import json,sys; print(sys.argv[2], "API Base URL:", json.load(open(sys.argv[1])).get("api_base_url", "(default: Groq)"))' "$f" $app
+    done ;;
+  configure)  # freeflowctl configure [freeflow|tellwell]: the named app, else every installed one
+    targets=()
+    case "${2:-}" in
+      "") for app in $APP_NAMES; do app_installed $app && targets+=($app); done ;;
+      freeflow|FreeFlow) targets=(FreeFlow) ;;
+      tellwell|TellWell) targets=(TellWell) ;;
+      *) echo "usage: freeflowctl configure [freeflow|tellwell]" >&2; exit 1 ;;
+    esac
+    (( ${#targets} )) || { echo "Neither FreeFlow nor TellWell is installed." >&2; exit 1; }
+    for app in $targets; do
+      if pgrep -xq "$app"; then  # only a running app: asking a missing one makes AppleScript show "Where is ...?"
+        osascript -e "tell application \"$app\" to quit" 2>/dev/null || true
+        sleep 2
+      fi
+      f=$(app_settings $app)
+      mkdir -p "${f:h}"
+      /usr/bin/python3 - "$f" "$URL" "$app" <<'EOF'
 import json, os, sys
-path, url = sys.argv[1], sys.argv[2]
+path, url, app = sys.argv[1:4]
 d = json.load(open(path)) if os.path.exists(path) else {}
 d["api_base_url"] = url
 d.pop("transcription_api_url", None)  # audio goes to the same URL
-d.setdefault("groq_api_key", "local")  # FreeFlow requires a non-empty key
+d.setdefault("groq_api_key", "local")  # the app requires a non-empty key
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f:
     json.dump(d, f)
-print("FreeFlow API Base URL ->", url)
+print(app, "API Base URL ->", url)
 EOF
-    open -a FreeFlow ;;
+      app_installed $app && open -a $app
+    done ;;
   *) sed -n '2,20p' "$0"; exit 1 ;;
 esac
