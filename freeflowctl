@@ -9,7 +9,7 @@
 #   freeflowctl configure   point FreeFlow at the local server (quits and reopens FreeFlow)
 #   freeflowctl ane on|off  speech-to-text on the Neural Engine (Core ML) or on the GPU (MLX, default)
 #   freeflowctl model e4b|e2b|<hf id>   cleanup model: Gemma 4 E4B (default, better) or E2B (faster, smaller)
-#   freeflowctl model s1 [adapter dir]  experimental: S1-mini + a fine-tuned adapter (default dir: adapters/s1-mini)
+#   freeflowctl model s1 [dir]          experimental: S1-mini fine-tuned, as an adapter or merged model folder
 #   freeflowctl screen-words on|off      spell on-screen names and terms right, using FreeFlow's context screenshot
 #   freeflowctl asr-warm on|off          keep the speech model loaded when idle (only the cleanup LLM unloads)
 #   freeflowctl boost on|off             experimental: steer the Neural Engine recogniser toward your vocabulary
@@ -43,19 +43,26 @@ case "${1:-status}" in
     case "${2:-}" in
       e4b) id=mlx-community/gemma-4-e4b-it-4bit ;;
       e2b) id=mlx-community/gemma-4-e2b-it-4bit ;;
-      s1)  # experimental: S1-mini with a locally fine-tuned LoRA adapter (not shipped in releases)
-        id=mlx-community/S1-mini-MLX-bf16; adapter="${3:-adapters/s1-mini}"
-        [[ -f "$D/$adapter/adapters.safetensors" || -f "$adapter/adapters.safetensors" ]] \
-          || { echo "No adapter at $adapter (needs adapters.safetensors and adapter_config.json)" >&2; exit 1; } ;;
+      s1)  # experimental, not shipped in releases: S1-mini fine-tuned locally, as a LoRA adapter folder
+           # (adapters.safetensors) or as a merged, possibly quantized, model folder (config.json)
+        dir="${3:-adapters/s1-mini}"; [[ -d "$D/$dir" ]] && dir="$D/$dir"
+        if [[ -f "$dir/adapters.safetensors" ]]; then
+          id=mlx-community/S1-mini-MLX-bf16; adapter="${3:-adapters/s1-mini}"
+        elif [[ -f "$dir/config.json" ]]; then
+          id="${dir:A}"; merged=1
+        else
+          echo "No adapter or model at $dir (needs adapters.safetensors, or a model's config.json)" >&2; exit 1
+        fi ;;
       */*) id=$2 ;;
       *) echo "usage: freeflowctl model e4b|e2b|s1 [adapter dir]|<huggingface id>" >&2; exit 1 ;;
     esac
     rev=$(awk -v m="$id" '$1 == m {print $2}' "$D/pinned-models.txt" 2>/dev/null)
     pin=(); [[ -n "$rev" ]] && pin=(--revision "$rev")
-    (cd "$D" && out=$(uv run --frozen hf download "$id" "${pin[@]}" --quiet 2>&1)) || { echo "Download failed for $id" >&2; exit 1; }
+    [[ -n "${merged:-}" ]] || (cd "$D" && out=$(uv run --frozen hf download "$id" "${pin[@]}" --quiet 2>&1)) \
+      || { echo "Download failed for $id" >&2; exit 1; }
     set_setting LLM_MODEL "$id"
     set_setting LLM_ADAPTER "$adapter"
-    set_setting LLM_PROMPT "$([[ -n "$adapter" ]] && echo compact || echo freeflow)"
+    set_setting LLM_PROMPT "$([[ -n "$adapter" || -n "${merged:-}" ]] && echo compact || echo freeflow)"
     launchctl kickstart -k "gui/$UID/$LABEL"
     echo "Cleanup model: $id${adapter:+ + adapter $adapter}. Backend restarted." ;;
   ane)
@@ -161,7 +168,8 @@ if "screen_words" in h:
 if h.get("asr_boost"):
     print("boosting:     on (vocabulary + screen words steer the recogniser)")
 if h.get("vocab_learn"):
-    print(f"learning:     on ({h.get('learned_terms', 0)} learned terms; freeflowctl vocab list)")
+    n = h.get("learned_terms", 0)
+    print(f"learning:     on ({n} learned terms; freeflowctl vocab list)")
 secs = h.get("idle_seconds", "?")
 print(f"idle for {secs}s; unloads after", f"{idle:.0f}s" if idle > 0 else "never (always warm)")' || true
     [[ -f "$SETTINGS" ]] && /usr/bin/python3 -c 'import json,sys; print("FreeFlow API Base URL:", json.load(open(sys.argv[1])).get("api_base_url", "(default: Groq)"))' "$SETTINGS" ;;
