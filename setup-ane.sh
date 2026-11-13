@@ -45,7 +45,9 @@ fi
 if [[ -n "${BUILD_HELPER:-}" ]]; then
   echo "Building the Neural Engine helper..."
   mkdir -p "$D/bin"
-  swiftc -O -o "$D/bin/orukeet-ane" "$D/ane/orukeet_ane.swift"
+  # Build to a new file and rename it into place: rewriting the running helper in place makes macOS kill its next launch.
+  swiftc -O -o "$D/bin/orukeet-ane.new" "$D/ane/orukeet_ane.swift"
+  mv -f "$D/bin/orukeet-ane.new" "$D/bin/orukeet-ane"
 fi
 
 echo "Compiling the model for this Mac's Neural Engine (about 15 s the first time)..."
