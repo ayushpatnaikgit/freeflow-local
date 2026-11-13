@@ -44,6 +44,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 import compact_prompt
 import fast_tdt
 import screen_words
+import vocab_guard
 import vocab_learner
 
 HERE = Path(__file__).resolve().parent
@@ -750,6 +751,7 @@ async def chat_completions(request: Request):
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
             data = _guard_output(_keep_spoken_words(data, raw), raw)
+            data = _guard_vocabulary(data, raw, vocabulary_terms(messages[0]["content"]) + learned_terms())
             pasted = pasted_text(data)
             if watcher is not None and pasted:
                 watcher.watch(pasted, vocabulary_terms(messages[0]["content"]))
@@ -795,6 +797,21 @@ def _guard_output(data: bytes, raw: str) -> bytes:
             return data
         log(f"cleanup turned a {n_raw}-word transcript into {n_out} words; kept the transcript")
         message["content"] = raw
+        return json.dumps(body).encode()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return data
+
+
+def _guard_vocabulary(data: bytes, raw: str, terms: list[str]) -> bytes:
+    """Put back the words a vocabulary term replaced when they don't sound like it ("M1 MacBook Air" -> "MOU")."""
+    try:
+        body = json.loads(data)
+        message = body["choices"][0]["message"]
+        fixed, n = vocab_guard.restore_unsupported_terms(raw, message.get("content") or "", terms)
+        if not n:
+            return data
+        log(f"cleanup put a vocabulary term over {n} unrelated phrase(s); kept what was said")  # counts only
+        message["content"] = fixed
         return json.dumps(body).encode()
     except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         return data
