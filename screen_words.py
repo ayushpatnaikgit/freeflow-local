@@ -123,7 +123,9 @@ def _sound(text: str) -> str:
         s = s.replace(a, b)
     if not s:
         return s
-    return re.sub(r"(.)\1+", r"\1", s[0] + re.sub(r"[aeiouy]", "", s[1:]))
+    # any opening vowel counts as the same sound: recognisers often swap it ("AuroKit" for Orukeet)
+    first = "a" if s[0] in "aeiou" else s[0]
+    return re.sub(r"(.)\1+", r"\1", first + re.sub(r"[aeiouy]", "", s[1:]))
 
 
 def _similarity(word: str, spoken: str) -> float:
