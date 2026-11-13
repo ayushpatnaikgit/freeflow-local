@@ -207,7 +207,12 @@ path, url, app = sys.argv[1:4]
 d = json.load(open(path)) if os.path.exists(path) else {}
 d["api_base_url"] = url
 d.pop("transcription_api_url", None)  # audio goes to the same URL
-d.setdefault("groq_api_key", "local")  # the app requires a non-empty key
+if app == "TellWell":
+    # TellWell 0.2+ always uses the engine and has no API key: drop the placeholder earlier installs wrote.
+    if d.get("groq_api_key") == "local":
+        del d["groq_api_key"]
+else:
+    d.setdefault("groq_api_key", "local")  # FreeFlow requires a non-empty key
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f:
     json.dump(d, f)
