@@ -27,6 +27,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +44,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 import compact_prompt
 import fast_tdt
 import screen_words
+import vocab_learner
 
 HERE = Path(__file__).resolve().parent
 
@@ -116,6 +118,10 @@ CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "120"))
 STRIP_FILLERS = os.environ.get("STRIP_FILLERS", "1") != "0"  # remove uh/um/hmm after transcription
 SCREEN_WORDS = os.environ.get("SCREEN_WORDS", "1") != "0"  # use words read from FreeFlow's context screenshot
 OCR_HELPER = HERE / "bin" / "screen-ocr"
+EDIT_WATCH = HERE / "bin" / "edit-watch"
+# Learn vocabulary from the user's corrections of pasted text (needs Accessibility for bin/edit-watch). Off by default.
+VOCAB_LEARN = os.environ.get("VOCAB_LEARN", "0") == "1"
+LEARNED_FILE = HERE / "learned_vocabulary.json"
 SCREEN_WORDS_MAX_AGE = 300.0  # seconds from recording start (context request) to cleanup; older words are ignored
 # Vocabulary boosting in Orukeet (Neural Engine only): the user's FreeFlow vocabulary and this dictation's screen
 # words tip close calls in the recogniser toward those spellings. Only whole terms are accepted. Off by default.
@@ -430,6 +436,88 @@ async def _with_word_hints(messages: list, task: asyncio.Future | None, transcri
         messages[-1]["content"] = content.replace(marker, section + "\n" + marker)
 
 
+# ---------------------------------------------------------------- vocabulary learning (opt-in)
+
+_learned = vocab_learner.LearnedVocabulary(LEARNED_FILE) if VOCAB_LEARN else None
+
+
+class _EditWatcher:
+    """bin/edit-watch: after each paste, reports how the pasted text reads once the user has edited it.
+    Pasted and edited text stay in memory; only learned terms are stored, and logs carry counts."""
+
+    def __init__(self) -> None:
+        self.proc = subprocess.Popen([str(EDIT_WATCH)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        ready = json.loads(self.proc.stdout.readline() or "{}")
+        if not ready.get("ready"):
+            raise RuntimeError("edit-watch did not start")
+        if not ready.get("trusted"):
+            log("vocabulary learning: edit-watch needs Accessibility permission (freeflowctl learn on)")
+        self.pending: list[tuple[str, list[str]]] = []  # one entry per watch, in order
+        self.lock = threading.Lock()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def watch(self, pasted: str, vocabulary: list[str]) -> None:
+        with self.lock:
+            self.pending.append((pasted, vocabulary))
+            self.proc.stdin.write(json.dumps({"watch": pasted, "seconds": 30}) + "\n")
+            self.proc.stdin.flush()
+
+    def stop(self) -> None:
+        with self.lock:
+            self.proc.stdin.write('{"stop": true}\n')
+            self.proc.stdin.flush()
+
+    def _read(self) -> None:
+        for line in self.proc.stdout:
+            try:
+                edited = json.loads(line).get("edited")
+            except ValueError:
+                continue
+            with self.lock:
+                pasted, vocabulary = self.pending.pop(0) if self.pending else ("", [])
+            if edited and pasted and _learned is not None:
+                n = _learned.learn(pasted, edited, vocabulary)
+                if n:
+                    log(f"vocabulary learning: {n} correction(s) learned")  # counts only
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+
+
+_watcher: _EditWatcher | None = None
+_watcher_failed = False
+
+
+def _edit_watcher() -> _EditWatcher | None:
+    global _watcher, _watcher_failed
+    if not VOCAB_LEARN or _watcher_failed or not EDIT_WATCH.exists():
+        return None
+    if _watcher is None or _watcher.proc.poll() is not None:
+        try:
+            _watcher = _EditWatcher()
+        except Exception as e:  # noqa: BLE001 - learning is optional
+            log(f"vocabulary learning unavailable ({type(e).__name__}); off until restart")
+            _watcher_failed = True
+            return None
+    return _watcher
+
+
+def learned_terms() -> list[str]:
+    return _learned.terms() if _learned is not None else []
+
+
+def pasted_text(data: bytes) -> str | None:
+    """What FreeFlow will paste from a cleanup reply (it trims and drops surrounding quotes; EMPTY pastes nothing)."""
+    try:
+        text = (json.loads(data)["choices"][0]["message"].get("content") or "").strip()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+    if len(text) > 1 and text.startswith('"') and text.endswith('"'):
+        text = text[1:-1].strip()
+    return None if not text or text == "EMPTY" else text
+
+
 # ---------------------------------------------------------------- LLM (child process)
 
 _llm: subprocess.Popen | None = None
@@ -583,6 +671,8 @@ async def lifespan(_app):
     watcher.cancel()
     _stop_llm()
     _close_ocr()
+    if _watcher is not None:
+        _watcher.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -616,6 +706,7 @@ async def health():
             "llm_running": _llm_alive(),
             "screen_words": SCREEN_WORDS and not _ocr_failed and OCR_HELPER.exists(),
             "asr_boost": ASR_BOOST,
+            "vocab_learn": VOCAB_LEARN, "learned_terms": len(learned_terms()),
             "idle_seconds": round(time.monotonic() - _last_activity),
             "idle_unload_after": IDLE_UNLOAD_SECONDS, "asr_model": ASR_MODEL, "llm_model": LLM_MODEL}
 
@@ -647,12 +738,18 @@ async def chat_completions(request: Request):
             raw = m.group(1).strip() if m else None
         screen_task = _take_screen_task() if raw is not None else None
         await _ensure_llm()
+        watcher = _edit_watcher()
         if raw is not None:
-            vocabulary = vocabulary_terms(messages[0]["content"]) if VOCAB_HINTS else []
+            vocabulary = vocabulary_terms(messages[0]["content"]) + learned_terms() if VOCAB_HINTS else []
             await _with_word_hints(messages, screen_task, raw, vocabulary)
+        elif watcher is not None:
+            watcher.stop()  # a new recording: finish watching the previous paste before this one lands
         status, data, ctype = await asyncio.to_thread(_http, "POST", "/v1/chat/completions", payload)
         if status == 200 and raw:
             data = _guard_output(_keep_spoken_words(data, raw), raw)
+            pasted = pasted_text(data)
+            if watcher is not None and pasted:
+                watcher.watch(pasted, vocabulary_terms(messages[0]["content"]))
         return Response(content=data, status_code=status, media_type=ctype)
 
 
@@ -732,9 +829,14 @@ async def transcriptions(
             path = tmp.name
         try:
             t = time.perf_counter()
-            boost = boost_terms(vocabulary_terms(_cleanup_system_prompt), _peek_screen_words()) if ASR_BOOST else None
+            boost = (boost_terms(vocabulary_terms(_cleanup_system_prompt) + learned_terms(), _peek_screen_words())
+                     if ASR_BOOST else None)
             text = await asyncio.get_running_loop().run_in_executor(_mlx, _transcribe, path, boost)
             log(f"asr {(time.perf_counter() - t) * 1000:.0f}ms chars={len(text)}")
+            if _learned is not None:
+                text, n = vocab_learner.apply_aliases(text, _learned.aliases())
+                if n:
+                    log(f"vocabulary learning: {n} learned alias(es) applied")  # counts only
         finally:
             os.unlink(path)
 

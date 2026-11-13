@@ -39,7 +39,7 @@ fi
 echo "Installing to: $DEST"
 mkdir -p "$DEST/logs" "$DEST/ane" "$DEST/ocr" "$DEST/bin"
 rm -f "$DEST/parakeet_server.py"  # renamed to server.py in 0.1.0
-for f in server.py fast_tdt.py screen_words.py compact_prompt.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
+for f in server.py fast_tdt.py screen_words.py compact_prompt.py vocab_learner.py pinned-models.txt freeflowctl install-autostart.sh start.sh setup-ane.sh bench_fast.py \
          ane/orukeet_ane.swift ane/JointDecisionv3Logits.mlmodel ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
@@ -72,6 +72,19 @@ elif command -v swiftc >/dev/null; then
 else
   echo "Note: Xcode Command Line Tools not found (xcode-select --install), so screen words are off."
 fi
+
+# edit-watch (vocabulary learning, opt-in): macOS ties its Accessibility permission to the exact binary, so it is only
+# replaced when its source changes; otherwise every reinstall would silently revoke the permission.
+mkdir -p "$DEST/learn"
+if [[ -x "$SRC/bin/edit-watch" && ! "$SRC/learn/edit_watch.swift" -nt "$SRC/bin/edit-watch" ]]; then
+  cmp -s "$SRC/bin/edit-watch" "$DEST/bin/edit-watch" || cp "$SRC/bin/edit-watch" "$DEST/bin/edit-watch"
+elif ! cmp -s "$SRC/learn/edit_watch.swift" "$DEST/learn/edit_watch.swift" || [[ ! -x "$DEST/bin/edit-watch" ]]; then
+  if command -v swiftc >/dev/null; then
+    echo "Building the vocabulary-learning helper..."
+    swiftc -O -o "$DEST/bin/edit-watch" "$SRC/learn/edit_watch.swift" || rm -f "$DEST/bin/edit-watch"
+  fi
+fi
+cp "$SRC/learn/edit_watch.swift" "$DEST/learn/edit_watch.swift"
 if [[ -x "$DEST/bin/screen-ocr" ]] && ! "$DEST/bin/screen-ocr" --selftest >/dev/null; then
   rm -f "$DEST/bin/screen-ocr"
   echo "Warning: the screen-words helper failed its self-test; screen words are off." >&2

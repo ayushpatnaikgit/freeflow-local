@@ -11,7 +11,7 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "${STAGE:?}"' EXIT
 git archive --format=tar --prefix=freeflow-local/ HEAD | tar -x -C "$STAGE"
 mkdir -p "$STAGE/freeflow-local/bin"
-cp bin/orukeet-ane bin/screen-ocr "$STAGE/freeflow-local/bin/"
+cp bin/orukeet-ane bin/screen-ocr bin/edit-watch "$STAGE/freeflow-local/bin/"
 git rev-parse HEAD > "$STAGE/freeflow-local/COMMIT"
 mkdir -p dist
 tar -C "$STAGE" -czf "dist/$NAME.tar.gz" freeflow-local

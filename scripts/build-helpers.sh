@@ -9,5 +9,6 @@ TARGET=arm64-apple-macos14.0  # oldest macOS the binaries run on
 mkdir -p bin
 swiftc -O -target "$TARGET" -o bin/orukeet-ane ane/orukeet_ane.swift
 swiftc -O -target "$TARGET" -o bin/screen-ocr ocr/screen_ocr.swift
+swiftc -O -target "$TARGET" -o bin/edit-watch learn/edit_watch.swift
 bin/screen-ocr --selftest >/dev/null || { echo "screen-ocr failed its self-test" >&2; exit 1; }
-echo "Built bin/orukeet-ane and bin/screen-ocr for $TARGET."
+echo "Built bin/orukeet-ane, bin/screen-ocr and bin/edit-watch for $TARGET."

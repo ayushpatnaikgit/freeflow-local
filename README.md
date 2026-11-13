@@ -166,6 +166,8 @@ cd ~/Library/Application\ Support/FreeFlowLocal
 ./freeflowctl screen-words on|off   # spell on-screen words (on by default)
 ./freeflowctl asr-warm on|off       # keep the speech model loaded when idle (off by default)
 ./freeflowctl boost on|off          # experimental: steer speech-to-text toward your vocabulary (off)
+./freeflowctl learn on|off          # learn names/terms from your corrections (off; asks for Accessibility)
+./freeflowctl vocab list            # what has been learned (vocab forget <term>, vocab clear)
 ./freeflowctl configure             # point FreeFlow at the backend again
 ./freeflowctl uninstall             # stop it and remove it from login
 ```
