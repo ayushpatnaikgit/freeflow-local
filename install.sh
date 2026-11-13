@@ -59,16 +59,29 @@ for model in "$ASR_MODEL" "$LLM_MODEL"; do
   fi
 done
 
+# Install a helper binary by renaming a fresh copy into place (a new file, never an in-place rewrite). The engine may
+# be running a helper during an update, and macOS kills the next launch of a signed program whose file was rewritten
+# in place while in use (exit 137). Usage: put_bin SRC DEST, or put_bin --built DEST after compiling to DEST.new.
+put_bin() {
+  if [[ "$1" == --built ]]; then
+    mv -f "$2.new" "$2"
+  else
+    cp "$1" "$2.new" && mv -f "$2.new" "$2"
+  fi
+}
+
 # Swift helpers: a release (get.sh) ships them prebuilt in bin/; a git checkout builds them, which needs the
 # Xcode Command Line Tools. Without either, screen words and Neural Engine speech-to-text are unavailable.
 rm -f "$DEST/bin/screen-ocr"
 # A prebuilt helper is used only if it is newer than its source (a stale one silently lacks newer features).
 if [[ -x "$SRC/bin/screen-ocr" && -x "$SRC/bin/orukeet-ane" && ! "$SRC/ocr/screen_ocr.swift" -nt "$SRC/bin/screen-ocr" \
       && ! "$SRC/ane/orukeet_ane.swift" -nt "$SRC/bin/orukeet-ane" ]]; then
-  cp "$SRC/bin/screen-ocr" "$SRC/bin/orukeet-ane" "$DEST/bin/"
+  put_bin "$SRC/bin/screen-ocr" "$DEST/bin/screen-ocr"
+  put_bin "$SRC/bin/orukeet-ane" "$DEST/bin/orukeet-ane"
 elif command -v swiftc >/dev/null; then
   echo "Building the screen-words helper..."
-  swiftc -O -o "$DEST/bin/screen-ocr" "$DEST/ocr/screen_ocr.swift" || rm -f "$DEST/bin/screen-ocr"
+  swiftc -O -o "$DEST/bin/screen-ocr.new" "$DEST/ocr/screen_ocr.swift" && put_bin --built "$DEST/bin/screen-ocr" \
+    || rm -f "$DEST/bin/screen-ocr" "$DEST/bin/screen-ocr.new"
 else
   echo "Note: Xcode Command Line Tools not found (xcode-select --install), so screen words are off."
 fi
@@ -77,11 +90,12 @@ fi
 # replaced when its source changes; otherwise every reinstall would silently revoke the permission.
 mkdir -p "$DEST/learn"
 if [[ -x "$SRC/bin/edit-watch" && ! "$SRC/learn/edit_watch.swift" -nt "$SRC/bin/edit-watch" ]]; then
-  cmp -s "$SRC/bin/edit-watch" "$DEST/bin/edit-watch" || cp "$SRC/bin/edit-watch" "$DEST/bin/edit-watch"
+  cmp -s "$SRC/bin/edit-watch" "$DEST/bin/edit-watch" || put_bin "$SRC/bin/edit-watch" "$DEST/bin/edit-watch"
 elif ! cmp -s "$SRC/learn/edit_watch.swift" "$DEST/learn/edit_watch.swift" || [[ ! -x "$DEST/bin/edit-watch" ]]; then
   if command -v swiftc >/dev/null; then
     echo "Building the vocabulary-learning helper..."
-    swiftc -O -o "$DEST/bin/edit-watch" "$SRC/learn/edit_watch.swift" || rm -f "$DEST/bin/edit-watch"
+    swiftc -O -o "$DEST/bin/edit-watch.new" "$SRC/learn/edit_watch.swift" && put_bin --built "$DEST/bin/edit-watch" \
+      || rm -f "$DEST/bin/edit-watch" "$DEST/bin/edit-watch.new"
   fi
 fi
 cp "$SRC/learn/edit_watch.swift" "$DEST/learn/edit_watch.swift"
