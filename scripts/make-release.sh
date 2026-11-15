@@ -13,6 +13,8 @@ git archive --format=tar --prefix=freeflow-local/ HEAD | tar -x -C "$STAGE"
 mkdir -p "$STAGE/freeflow-local/bin"
 cp bin/orukeet-ane bin/screen-ocr bin/edit-watch "$STAGE/freeflow-local/bin/"
 git rev-parse HEAD > "$STAGE/freeflow-local/COMMIT"
+# The release version (the tag being built), reported by the server's /health so apps can offer engine updates.
+echo "${GITHUB_REF_NAME:-$(git describe --tags --exact-match 2>/dev/null || echo dev)}" > "$STAGE/freeflow-local/VERSION"
 mkdir -p dist
 tar -C "$STAGE" -czf "dist/$NAME.tar.gz" freeflow-local
 (cd dist && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256")

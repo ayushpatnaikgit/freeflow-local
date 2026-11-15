@@ -43,6 +43,8 @@ for f in server.py cleanup_server.py fast_tdt.py screen_words.py compact_prompt.
          ane/orukeet_ane.swift ane/JointDecisionv3Logits.mlmodel ocr/screen_ocr.swift pyproject.toml uv.lock README.md LICENSE NOTICE; do
   cp "$SRC/$f" "$DEST/$f"
 done
+# Releases carry a VERSION file (reported by /health); an install from a git checkout has none.
+if [ -f "$SRC/VERSION" ]; then cp "$SRC/VERSION" "$DEST/VERSION"; else rm -f "$DEST/VERSION"; fi
 chmod +x "$DEST/freeflowctl" "$DEST/install-autostart.sh" "$DEST/start.sh" "$DEST/setup-ane.sh"
 
 cd "$DEST"

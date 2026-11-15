@@ -708,9 +708,20 @@ async def models():
     ]}
 
 
+def engine_version(path: Path = HERE / "VERSION") -> str | None:
+    """The installed release ("v0.3.6"), or None for an install from a git checkout."""
+    try:
+        return path.read_text().strip() or None
+    except OSError:
+        return None
+
+
+ENGINE_VERSION = engine_version()
+
+
 @app.get("/health")
 async def health():
-    return {"ok": True, "asr_loaded": _asr is not None or _ane is not None,
+    return {"ok": True, "version": ENGINE_VERSION, "asr_loaded": _asr is not None or _ane is not None,
             "asr_backend": "ane" if _ane is not None else ("mlx" if _asr is not None else ASR_BACKEND),
             "llm_running": _llm_alive(),
             "screen_words": SCREEN_WORDS and not _ocr_failed and OCR_HELPER.exists(),
