@@ -6,7 +6,8 @@
 # 1. Installs the dictation app if it isn't installed:
 #    - FreeFlow (default): the official FreeFlow.dmg from github.com/zachlatta/freeflow, installed only if it is
 #      signed by FreeFlow's developer and notarized by Apple;
-#    - TellWell (--app tellwell): TellWell.dmg from github.com/ayushpatnaikgit/tellwell, installed only if it matches
+#    - TellWell (--app tellwell): since TellWell 0.3.0 runs its own engine, this runs TellWell's installer instead and
+#      installs nothing else. (Older behaviour, kept for reference: TellWell.dmg from github.com/ayushpatnaikgit/tellwell, installed only if it matches
 #      the SHA-256 published with the release and carries TellWell's bundle identifier with an intact signature.
 #      (TellWell is not yet signed with an Apple Developer ID; files downloaded by curl aren't quarantined, so
 #      macOS opens it without the "could not verify" prompt.)
@@ -55,6 +56,19 @@ for arg in "$@"; do
     *) set -- "$@" "$arg" ;;
   esac
 done
+
+if [ "$APP" = TellWell ]; then
+  # TellWell 0.3.0 and later run speech recognition and cleanup inside the app and don't use this engine, so install
+  # just TellWell, with its own installer (checksum and signing-certificate checks), and stop.
+  say "TellWell no longer needs freeflow-local: it runs its own engine. Installing TellWell only..."
+  tw=$(mktemp "${TMPDIR:-/tmp}/tellwell-install.XXXXXX")
+  curl -fsSL "${TELLWELL_INSTALLER:-https://ayushpatnaikgit.github.io/tellwell/install.sh}" -o "$tw" \
+    || { rm -f "$tw"; fail "could not download TellWell's installer."; }
+  status=0
+  sh "$tw" || status=$?
+  rm -f "$tw"
+  exit "$status"
+fi
 
 [ "$(uname -s)" = Darwin ] || fail "freeflow-local runs on macOS only."
 [ "$(uname -m)" = arm64 ] || fail "freeflow-local needs an Apple Silicon Mac (M1 or later)."
