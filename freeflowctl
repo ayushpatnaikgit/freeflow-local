@@ -47,7 +47,9 @@ case "${1:-status}" in
     tmp=$(mktemp "${TMPDIR:-/tmp}/freeflow-local-get.XXXXXX")
     curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh -o "$tmp" \
       || { rm -f "$tmp"; echo "Could not download the installer" >&2; exit 1; }
-    exec /bin/sh -c 'sh "$1" --no-freeflow; status=$?; rm -f "$1"; exit $status' freeflowctl-update "$tmp"
+    # --no-configure: the apps already point here, and configuring quits and reopens them, which would close an
+    # app that started this update.
+    exec /bin/sh -c 'sh "$1" --no-freeflow --no-configure; status=$?; rm -f "$1"; exit $status' freeflowctl-update "$tmp"
     ;;
   install)   "$D/install-autostart.sh" ;;
   uninstall) "$D/install-autostart.sh" --uninstall ;;
