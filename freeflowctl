@@ -18,6 +18,8 @@
 #   freeflowctl learn on|off             learn names and terms from your corrections of pasted text (asks for
 #                                        Accessibility permission for bin/edit-watch)
 #   freeflowctl vocab list|forget <term>|clear   what has been learned
+#   freeflowctl update      install the latest release (checked against its published SHA-256); keeps models,
+#                           settings and learned vocabulary
 set -euo pipefail
 D="${0:A:h}"
 URL="http://127.0.0.1:8081/v1"
@@ -39,6 +41,16 @@ set_setting() {  # set_setting KEY VALUE in settings.env (read by the server at 
 }
 
 case "${1:-status}" in
+  update)
+    # The same installer as the one-line install, run without installing or replacing any app. It rewrites this
+    # script, so exec: the shell must not read further from the file it was started from.
+    tmp=$(mktemp "${TMPDIR:-/tmp}/freeflow-local-get.XXXXXX")
+    curl -fsSL https://raw.githubusercontent.com/ayushpatnaikgit/freeflow-local/main/get.sh -o "$tmp" \
+      || { rm -f "$tmp"; echo "Could not download the installer" >&2; exit 1; }
+    # --no-configure: the apps already point here, and configuring quits and reopens them, which would close an
+    # app that started this update.
+    exec /bin/sh -c 'sh "$1" --no-freeflow --no-configure; status=$?; rm -f "$1"; exit $status' freeflowctl-update "$tmp"
+    ;;
   install)   "$D/install-autostart.sh" ;;
   uninstall) "$D/install-autostart.sh" --uninstall ;;
   restart)

@@ -173,6 +173,7 @@ The backend lives in `~/Library/Application Support/FreeFlowLocal`:
 cd ~/Library/Application\ Support/FreeFlowLocal
 ./freeflowctl status                # is it running, which models are loaded
 ./freeflowctl restart
+./freeflowctl update                # install the latest release (SHA-256 checked); keeps models and settings
 ./freeflowctl logs
 ./freeflowctl model s1|e4b|e2b|<id>  # change the cleanup model
 ./freeflowctl ane on|off            # speech-to-text on the Neural Engine or the GPU
