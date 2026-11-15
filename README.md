@@ -197,7 +197,10 @@ FreeFlow talks to any OpenAI-compatible API. This backend serves one on `http://
 - Hesitation sounds (uh, um, uhm, hmm) are removed right after transcription, so they disappear even when
   FreeFlow's "preserve exact wording" mode is on or cleanup is skipped. Real words such as "er", "ah" and "mm" are
   kept. Set `STRIP_FILLERS=0` in the environment to turn this off.
-- `/v1/chat/completions` is forwarded to an `mlx_lm.server` process that the backend starts and stops on demand.
+- `/v1/chat/completions` is forwarded to a model server that the backend starts and stops on demand. For the
+  cleanup model this is `cleanup_server.py`: greedy decoding with copy-ahead drafts (tokens copied from the
+  transcript, checked in the same forward pass), which gives the same text about 40% faster. Other models, or
+  `LLM_DECODER=mlx`, use `mlx_lm.server`.
   The model name FreeFlow sends is ignored, so FreeFlow's model settings don't matter.
 - When you start recording, FreeFlow asks what app you're in. That request wakes the backend: both models start
   loading, FreeFlow's cleanup instructions are processed into the model's cache, and the screenshot is read, all

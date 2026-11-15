@@ -113,6 +113,9 @@ LLM_ADAPTER = adapter_path(os.environ.get("LLM_ADAPTER", ""))
 LLM_REQUEST_MODEL = "default_model" if LLM_ADAPTER else LLM_SOURCE
 # "compact": swap FreeFlow's default prompt for the one the fine-tuned model was trained on; "freeflow": pass it through
 LLM_PROMPT = os.environ.get("LLM_PROMPT") or ("compact" if "S1-mini-FreeFlow" in LLM_MODEL else "freeflow")
+# "copyahead": serve the cleanup model with cleanup_server.py (greedy + copy-ahead decoding, same text, ~40% faster);
+# "mlx": mlx_lm.server. Copy-ahead is the default for the fine-tuned cleanup model (compact prompt).
+LLM_DECODER = os.environ.get("LLM_DECODER") or ("copyahead" if LLM_PROMPT == "compact" else "mlx")
 LLM_PORT = int(os.environ.get("LLM_PORT", "0"))  # 0 = pick a free port each time the LLM starts
 IDLE_UNLOAD_SECONDS = float(os.environ.get("IDLE_UNLOAD_SECONDS", "600"))  # 0 = always warm
 # Keep the speech model loaded when idle (only the cleanup LLM unloads). It is small, and a cold Neural Engine
@@ -563,7 +566,9 @@ async def _ensure_llm() -> None:
         t = time.perf_counter()
         _llm_port = LLM_PORT or _free_port()
         logf = open(HERE / "logs" / "llm.log", "ab")
-        cmd = [str(Path(sys.executable).parent / "mlx_lm.server"), "--model", LLM_SOURCE,
+        server_cmd = ([sys.executable, str(HERE / "cleanup_server.py")] if LLM_DECODER == "copyahead"
+                      else [str(Path(sys.executable).parent / "mlx_lm.server")])
+        cmd = server_cmd + ["--model", LLM_SOURCE,
                "--host", "127.0.0.1", "--port", str(_llm_port), "--max-tokens", "4096",
                "--chat-template-args", '{"enable_thinking":false}',
                "--allowed-origins", "none"]  # no web page may call the model server (default would be "*")
